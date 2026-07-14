@@ -1,9 +1,11 @@
-# Curbside Sites — Tenant App
+# Curbside Sites — Tenant App + Control Plane
 
 One Next.js application that renders **any** Curbside Sites client from a
-database record. One codebase, N tenants, zero per-client code in core —
-that rule (D1) governs everything; the full decision record lives in
-`../ARCHITECTURE.md` (D1–D20 + invariants), and this app is Session 1 of the
+database record, plus the control plane that turns a prospect into a live
+tenant and keeps the fleet observable. One codebase, N tenants, zero
+per-client code in core — that rule (D1) governs everything; the full
+decision record lives in `../ARCHITECTURE.md` (D1–D20 + invariants). This
+repo now covers Sessions 1 (tenant app) **and 2 (control plane)** of the
 build plan in `../00-BUILD-PROMPT.md`.
 
 This README is the handoff document: you should be able to continue from
@@ -29,18 +31,24 @@ npm run db:migrate
 # 4. Two realistic demo tenants
 npm run db:seed
 
-# 5. Run it
+# 5. The control-plane demo fleet (4 more tenants in mixed states) + the
+#    first staff user (prints the login; MFA enrolls on first sign-in)
+npm run db:seed:fleet
+
+# 6. Run it
 npm run dev        # or: npm run build && npm start
 ```
 
-Then browse — both of these are the same running server:
+Then browse — all of these are the same running server:
 
 - http://iron-ridge-offroad.localhost:3000 — off-road shop, dark industrial brand
 - http://delta-marine-service.localhost:3000 — boat service, light nautical brand
+- **http://admin.localhost:3000** — the staff control plane (fleet dashboard, queue, alerts)
+- **http://localhost:3000/onboard** — the public intake form (a submission = a browsable draft tenant)
 
 Custom-domain routing is testable without DNS: `curl -H "Host: ironridgeoffroad.test" http://127.0.0.1:3000/`.
 
-Full verification (build + RLS gate + smoke + axe): `npm run verify`.
+Full verification (build + RLS gate + smoke + axe + control-plane e2e): `npm run verify`.
 
 ---
 
@@ -97,15 +105,108 @@ secret **names** and whether they resolve — never values.
 
 ---
 
+## The control plane (Session 2) — read this once
+
+**Two database roles, two surfaces, never conflated (D16).** The tenant app
+connects as `curbside_app` (read-only on tenants/domains, blind to staff,
+billing, consent, and alarm tables). Everything under `/admin`, `/platform`,
+`/api/stripe`, and `/api/jobs` connects as `curbside_control`
+(`src/lib/control/db.ts` — the ONLY file touching that pool), whose
+cross-tenant reach is explicit RLS policies, not BYPASSRLS. Never import
+`control/db` from anything under `src/app/s/[host]`.
+
+**Hosts:** `admin.<apex>` → the staff surface (password + TOTP, enrollment
+forced at first login). Bare apex → `/platform`, the one public control-plane
+surface: the intake form. Both are reserved slugs at the DB level.
+
+### The onboarding pipeline, end to end
+
+1. **Prospect submits `/onboard`** (Part 2.1). The form's output is DATABASE
+   ROWS, written in one `curbside_control` transaction
+   (`src/lib/control/onboarding.ts`): a `draft` tenant, business_profile
+   (NAP/hours/socials/voice), services, a brand row carrying the GENERATED
+   proposal tokens (so the draft renders instantly), the image-slot manifest,
+   all 11 integration rows (demo mode, kv refs pre-named), consents rows with
+   the exact language agreed to, the auto-booked call, and the intake receipt.
+   The add-on checkboxes ARE the feature flags (D19). Zero human DB access.
+2. **The success page and receipt email carry the preview link** —
+   `http://<slug>.<apex>/?preview=<token>`, the sales artifact (2.5).
+3. **The brand gate (2.3), the one human gate:** admin → tenant → Brand gate
+   shows swatches, the contrast report (same math as CI), texture notes, and
+   the do-not-do list. LOOK AT THE PREVIEW, then approve (writes tokens to
+   the live brand row) or reject with a note. Never automate this.
+4. **The call (2.4)** under the consent regime (2.2): the recording checkbox
+   at intake is a distinct consent stored verbatim; no written consent → the
+   call proceeds UNRECORDED and the transcript upload REFUSES. Verbal consent
+   must also be confirmed in-recording before a transcript is usable.
+   Withdrawal (one button) deletes recording + transcript.
+5. **Content seeding (2.6):** admin → tenant → Seed content. Voice source =
+   consented transcript, else the intake voice field; an unconsented
+   transcript is a hard refusal in your face (2.2.4). Drafts land UNPUBLISHED;
+   publish per-post after reading them.
+6. **Domain (2.5, D8):** admin → tenant → Domains → provision. Creates the
+   Cloudflare custom hostname (demo provider simulates until Session 4),
+   emails REGISTRAR-SPECIFIC record instructions, polls on every jobs run,
+   chases the client automatically every 3 quiet days, notifies both sides on
+   verification — and flips `draft → live` when the brand gate has passed.
+   Staff can force platform-subdomain-only go-live from the tenant page.
+
+### Watching the fleet
+
+- **`npm run jobs`** (or POST `/api/jobs/run`, or the dashboard's "Run checks
+  now") runs: domain verification + chase, dunning, the zero-submissions
+  alarm (14 quiet days on a tenant with a baseline — the churn detector,
+  Part 5), a synthetic end-to-end form check per live tenant (insert →
+  right-tenant check → owner email → delete → logged), SPF/DKIM/DMARC checks
+  per verified domain, and secret-expiry warnings. Findings land as `alerts`
+  rows; the dashboard sorts by what's on fire.
+- **Billing (Part 4):** Stripe webhooks (`/api/stripe/webhook`,
+  signature-verified, idempotent by event id) sync subscription state to
+  `billing`, `tenants.plan_tier`, and feature flags — buying an add-on flips
+  a flag, no provisioning step. Failed payments start the day-3/7/14 warning
+  ladder; day 14 PREPARES a suspension in the queue. **No code path suspends
+  automatically.** Local simulation:
+  `npm run stripe:simulate -- <slug> subscribe curb_plus crm` ·
+  `npm run stripe:simulate -- <slug> payment_failed --days-ago 15` then
+  `npm run jobs` · `npm run stripe:simulate -- <slug> paid`.
+
+### Control-plane recipes
+
+- **Onboard a tenant:** fill the form at `/onboard`. That's the recipe — if
+  you're inserting rows by hand for a real client, the pipeline is broken;
+  fix it instead (`scripts/seed.ts` remains the fixture reference).
+- **Provision a domain:** tenant page → Domains → enter the bare domain →
+  button. Instructions email themselves; verification and go-live are
+  automatic from there. Stalled clients get chased without you remembering.
+- **Rotate a secret:** write the new value to the same ref (vault/env), then
+  set `secret_expires_at`/`rotation_days` on the integration row (tenant page
+  shows expiry; the job warns 30 days out). Values never enter the DB.
+- **Suspend / restore:** tenant page buttons (status flips take effect next
+  request; the e2e proves under-construction-everywhere and intact
+  restoration). Non-payment suspensions arrive pre-built in the Queue —
+  approve or dismiss, never rubber-stamp.
+- **Offboard:** tenant page → Offboard (type the slug). Runs the full D20
+  sequence: suspend → exit export (`.data/exports/<slug>/` — JSON for the
+  Session-3 report renderer + a leads CSV a human can open) → release
+  domains + handback email → integrations to demo + vault purge manifest →
+  transcripts hard-deleted. Gracious on purpose.
+- **Work the queue:** `/queue` holds pending human actions (suspensions,
+  custom-work quotes) and escalated/urgent change requests with the original
+  message as the audit record (Part 8).
+
 ## Directory map (★ = the files you'll edit most)
 
 ```
-migrations/            forward-only SQL; 001 has every table + RLS policy
-scripts/               migrate, seed, export-static (D6), fetch-reviews, fetch-instagram
+migrations/            forward-only SQL; 001 tenant app, 002-004 control plane
+scripts/               migrate, seed, seed-fleet, run-jobs, simulate-stripe,
+                       export-static (D6), fetch-reviews, fetch-instagram, source-images
 src/
-  proxy.ts             Host → /s/<host>/ rewrite + ?preview= cookie handshake
+  proxy.ts             Host → /s/<host>/ rewrite + admin./apex control hosts
   lib/
-    db.ts              withTenant / platformQuery — THE ONLY pool access
+    control/         ★ THE CONTROL PLANE — db (control pool), staff-auth, totp,
+                       intake-schema, onboarding, brand-proposal, domains,
+                       billing, content-seeding, offboarding, jobs, fleet, notify
+    db.ts              withTenant / platformQuery — THE ONLY app-pool access
     tenant.ts        ★ host resolution + cached tenant bundle + tenantTag
     schemas.ts       ★ every Zod schema and row type (single source of shape)
     section-registry.tsx ★ name → component + props schema; DEFAULT_SECTIONS
@@ -123,7 +224,13 @@ src/
     forms/, portal/, tenant-image.tsx, markdown.tsx, track.tsx
   app/
     layout.tsx         fonts only; app/page.tsx 404s (proxy owns routing)
+    admin/             staff surface: login (+MFA), (app)/ fleet dashboard,
+                       tenants/[slug] (brand gate, consent, domains, billing,
+                       content), queue, alerts, actions.ts (all staff mutations)
+    platform/          public surface on the bare apex: landing stub + /onboard
     api/status/        staff go-live checklist (not host-scoped)
+    api/stripe/webhook/  billing ingest (signature-verified, idempotent)
+    api/jobs/run/      the scheduled-jobs trigger (CRON_TOKEN or staff session)
     s/[host]/          the entire tenant surface:
       layout.tsx       status gates, brand injection, JSON-LD, chrome
       page.tsx, services/, about/, gallery/, contact/, blog/, privacy/ terms/ accessibility/
@@ -246,13 +353,27 @@ it reads the DB directly.
 - **SMS channel for change requests** → implement `sms.ts` against
   `ChangeParser`/channel types in `src/lib/adapters/change-requests/types.ts`.
   Blocked on A2P 10DLC (ARCHITECTURE §6) — start registration early.
-- **Customer portal shell** (cut this session, see ASSUMPTIONS #24).
+- **Customer portal shell** (cut in Session 1, see ASSUMPTIONS #24).
 - **Static failover upload + Cloudflare health check** → `scripts/export-static.ts`
   produces verified snapshots in `.data/failover-snapshots/`; Session 4 wires
-  Blob upload + serving, Session 2 wires the alerting.
+  Blob upload + serving. The alerting seam exists NOW: write an `alerts` row
+  with kind `failover` and it lands on the dashboard sorted critical-first.
+- **Monthly report (Session 3)** → render from the same data the exit export
+  emits (`src/lib/control/offboarding.ts` shapes it); D20 says build it once.
+- **Real call scheduling** → replace `nextCallSlot()` in
+  `src/lib/control/onboarding.ts` with a Cal.com/Calendly integration; the
+  `onboarding_calls` row is the contract.
+- **CWV column on the dashboard** → needs RUM (Session 4); the column and its
+  honest "n/a" placeholder are in `src/app/admin/(app)/page.tsx`.
 
 ## Conventions to preserve
 
+- `withTenant` (app role) under `/s/[host]`; `control/db.ts` (control role)
+  everywhere staff-side. Neither crosses over — the roles make it stick.
+- Every staff mutation: `requireStaff()` first, `audit()` with the email,
+  `refreshAdmin()` last. Actions that can refuse return a message, not a throw.
+- Consent checks live in the WRITE paths (transcript upload) AND the READ
+  paths (getVoiceSource) — keep both; one is a UI, the other is the law.
 - No raw hex in components; no color that isn't a token.
 - No vendor API call in any request path — jobs fetch, tenants read our rows (D10).
 - Every integration: `types/live/demo/index` under `src/lib/adapters/<name>/`.
@@ -311,12 +432,36 @@ it reads the DB directly.
 - **ISR windows:** pages are dynamic per request, but the data bundle is
   600s-cached — a direct SQL write "not showing up" is almost always just
   the window. Portal writes bypass it via `updateTag`.
+- **New DB roles see "relation does not exist", not "permission denied":**
+  Session 1 revoked the public schema's default USAGE, so table GRANTs alone
+  aren't enough — a new role needs `GRANT USAGE ON SCHEMA public` first
+  (migration 003 learned this the hard way). The error genuinely looks like
+  a missing table.
+- **Server-action `redirect()` renders the target without the browser's Host
+  header** — on this host-routed app that streams the WRONG surface (platform
+  home instead of the admin). Auth flows return `{step:"done"}` and
+  `window.location.assign()` instead. Same family: after a plain form action,
+  a dynamic admin page keeps its stale RSC payload — hence `refreshAdmin()`
+  (`revalidatePath("/admin", "layout")`) at the end of every staff mutation.
+- **In-memory rate limiters outlive test runs:** the server process keeps its
+  windows across repeated verify loops. Staff login therefore counts only
+  FAILED attempts, and the intake limit is deliberately generous (honeypot +
+  Zod are the real gate). If a login mysteriously blocks during local
+  testing, you found this paragraph.
+- **The demo Cloudflare provider verifies on the first jobs run.** It has a
+  ~90s in-memory soak, but Next bundles the module separately per route, so
+  the jobs route sees a fresh (empty) map and treats the id as
+  already-active. Harmless for the local demo (verification just isn't
+  delayed); worth knowing before trusting module-level state to be shared
+  across routes anywhere else.
 
 ## Tests
 
 ```
 npm run test:rls   # D4 isolation gate — vitest, real DB, app role, both attack paths
-npm run test:e2e   # Playwright vs production server: smoke (18), lifecycle (4), axe (22)
+npm run test:e2e   # Playwright vs production server: smoke (18), lifecycle (4),
+                   # axe (22), control-plane (4: intake pipeline e2e, MFA login +
+                   # brand gate + go-live, consent refusal, suspend/restore)
 npm run verify     # build + both suites
 ```
 

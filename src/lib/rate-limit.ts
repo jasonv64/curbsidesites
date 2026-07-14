@@ -7,6 +7,12 @@
  */
 const buckets = new Map<string, number[]>();
 
+/** Non-recording check — used to gate on FAILED attempts only (staff login). */
+export function rateLimitPeek(key: string, max: number, windowMs: number): boolean {
+  const now = Date.now();
+  return (buckets.get(key) ?? []).filter((t) => now - t < windowMs).length < max;
+}
+
 export function rateLimit(key: string, max: number, windowMs: number): boolean {
   const now = Date.now();
   const hits = (buckets.get(key) ?? []).filter((t) => now - t < windowMs);

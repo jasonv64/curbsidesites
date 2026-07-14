@@ -8,8 +8,9 @@ import type { IntegrationRow } from "@/lib/schemas";
  * required secret and whether it resolves, last_error_at. NEVER a secret
  * value (Invariant 3) — this endpoint reports names and booleans only.
  *
- * Auth: Bearer STAFF_STATUS_TOKEN until the control plane ships real staff
- * auth with MFA (Session 2, D16). Documented in ASSUMPTIONS.md.
+ * Auth: Bearer STAFF_STATUS_TOKEN — kept as the machine-friendly surface for
+ * CI and scripts now that real staff auth (Session 2, D16) guards the human
+ * dashboard at admin.<apex>. The dashboard reads the same rows.
  */
 export async function GET(req: Request) {
   const token = process.env.STAFF_STATUS_TOKEN;

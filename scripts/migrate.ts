@@ -19,21 +19,27 @@ const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "migr
 async function main() {
   const url = process.env.DATABASE_URL_OWNER;
   if (!url) throw new Error("DATABASE_URL_OWNER is not set (see .env.example)");
-  const appPassword = process.env.APP_DB_PASSWORD ?? "curbside_app_dev";
 
   const db = new Client({ connectionString: url });
   await db.connect();
   try {
     // Role bootstrap — idempotent. NOBYPASSRLS is the load-bearing part (D4).
-    const { rows: roles } = await db.query(
-      "SELECT 1 FROM pg_roles WHERE rolname = 'curbside_app'"
-    );
-    if (roles.length === 0) {
-      await db.query(`CREATE ROLE curbside_app LOGIN NOBYPASSRLS NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD '${appPassword.replace(/'/g, "''")}'`);
-      console.log("created role curbside_app");
-    } else {
-      await db.query(`ALTER ROLE curbside_app LOGIN NOBYPASSRLS NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD '${appPassword.replace(/'/g, "''")}'`);
-    }
+    // curbside_app: the tenant app. curbside_control: the control plane
+    // (Session 2) — cross-tenant reach comes from explicit RLS policies in
+    // 002, never from bypassing RLS.
+    const ensureRole = async (name: string, password: string) => {
+      const stmt = (verb: string) =>
+        `${verb} ROLE ${name} LOGIN NOBYPASSRLS NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD '${password.replace(/'/g, "''")}'`;
+      const { rows } = await db.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [name]);
+      if (rows.length === 0) {
+        await db.query(stmt("CREATE"));
+        console.log(`created role ${name}`);
+      } else {
+        await db.query(stmt("ALTER"));
+      }
+    };
+    await ensureRole("curbside_app", process.env.APP_DB_PASSWORD ?? "curbside_app_dev");
+    await ensureRole("curbside_control", process.env.CONTROL_DB_PASSWORD ?? "curbside_control_dev");
 
     await db.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
       filename text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now()

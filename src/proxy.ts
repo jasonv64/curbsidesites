@@ -36,6 +36,24 @@ export default function proxy(request: NextRequest) {
 
   if (!host) return new NextResponse("Bad request: missing Host", { status: 400 });
 
+  // Control-plane surfaces (Session 2). Two reserved hosts, never tenants
+  // (the tenants table has a CHECK forbidding these slugs):
+  //   admin.<apex>          → /admin/*     staff-only control plane (D16)
+  //   <apex> / www.<apex>   → /platform/*  the public intake form (Part 2.1);
+  //                            Session 5 grows this into curbsidesites.com
+  const apex = (process.env.PLATFORM_APEX ?? "localhost").toLowerCase();
+  const bareHost = host.toLowerCase().replace(/:\d+$/, "");
+  if (bareHost === `admin.${apex}`) {
+    const rewritten = url.clone();
+    rewritten.pathname = `/admin${url.pathname === "/" ? "" : url.pathname}`;
+    return NextResponse.rewrite(rewritten);
+  }
+  if (bareHost === apex || bareHost === `www.${apex}`) {
+    const rewritten = url.clone();
+    rewritten.pathname = `/platform${url.pathname === "/" ? "" : url.pathname}`;
+    return NextResponse.rewrite(rewritten);
+  }
+
   const preview = url.searchParams.get("preview");
   if (preview) {
     const clean = url.clone();
@@ -56,8 +74,8 @@ export default function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // Everything except: platform-level API routes (/api/status), Next
-  // internals, and the favicon. robots/sitemap/llms/feed are per-tenant and
-  // DO get rewritten — they are route handlers under /s/[host].
-  matcher: ["/((?!api/status|_next/|favicon\\.ico).*)"],
+  // Everything except: platform-level API routes (status, Stripe webhooks,
+  // job runner), Next internals, and the favicon. robots/sitemap/llms/feed
+  // are per-tenant and DO get rewritten — route handlers under /s/[host].
+  matcher: ["/((?!api/status|api/stripe|api/jobs|_next/|favicon\\.ico).*)"],
 };

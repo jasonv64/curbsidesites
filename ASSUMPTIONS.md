@@ -1,4 +1,8 @@
-# ASSUMPTIONS.md — Session 1 (tenant app)
+# ASSUMPTIONS.md — Sessions 1 & 2
+
+Session 1 (tenant app) is #1–32; Session 2 (control plane) starts at #33.
+
+# Session 1 (tenant app)
 
 Every decision made without asking, per the build prompt. Where D3 said
 "pick one," the pick and the why are here.
@@ -162,3 +166,139 @@ Every decision made without asking, per the build prompt. Where D3 said
     spam. Real infrastructure must set `SECRET_PROVIDER=keyvault`, and the
     keyvault provider throws until Session 4 wires it — nothing can silently
     ship env-file secrets to production.
+
+---
+
+# Session 2 (control plane)
+
+## Architecture
+
+33. **A second NOBYPASSRLS database role, `curbside_control`,** carries the
+    control plane (staff surface, intake pipeline, jobs, webhooks). Its
+    cross-tenant reach comes from explicit permissive RLS policies (002), not
+    from bypassing RLS. The tenant app's `curbside_app` role gained NOTHING:
+    still read-only on tenants/domains, still blind to staff, billing,
+    consent, and alarm tables — D16's "never conflated" enforced by Postgres,
+    not convention. Gotcha discovered en route: Session 1 revoked the public
+    schema's default USAGE, so a new role sees "relation does not exist"
+    (not "permission denied") until granted schema USAGE — migration 003.
+34. **Control-plane hosts are reserved, not tenants:** `admin.<apex>` →
+    `/admin` (staff), bare apex / `www.` → `/platform` (public intake; grows
+    into curbsidesites.com in Session 5, noindex until then). A CHECK
+    constraint on `tenants.slug` makes collisions impossible, not unlikely.
+35. **Staff auth (D16) is passwords (scrypt) + TOTP (RFC 6238), no vendor.**
+    TOTP implemented on node:crypto (~60 lines, interop-tested against an
+    independent implementation in the e2e suite); secrets AES-256-GCM
+    encrypted at rest with `STAFF_TOTP_ENC_KEY`. Enrollment is FORCED at
+    first login — there is no password-only state that can reach the fleet.
+    Sessions: 12h, sha256-hashed tokens, `mfa_ok` gate. Login rate limit
+    counts only FAILED attempts.
+
+## Onboarding pipeline
+
+36. **Intake defaults:** new tenants land as `plan_tier='curb'` (the
+    mandatory base plan; upgrades come from billing sync), features straight
+    from the add-on checkboxes (D19), slug deduped inside the transaction.
+    The 30-minute call auto-books for the next business day 10:00 local —
+    a real scheduler (Cal.com etc.) is a later swap; the seam is the
+    `onboarding_calls` row.
+37. **Brand proposals are generated, the gate is human (2.3):** industry
+    preset (palette + font pairing + texture notes + do-not-do list) tinted
+    by dominant colors sharp extracts from the uploaded mark, then
+    auto-adjusted until the same WCAG math CI runs passes. Staff approve or
+    reject as-is in v1 (token editing happens via a re-upload or SQL until
+    the Part-14 theme editor exists). The DRAFT renders with proposed tokens
+    immediately — the gate blocks go-live, not browsability.
+38. **"Immediately browsable" (2.5) = the Session-1 preview-token link** on
+    the platform subdomain; the intake success page and the receipt email
+    both carry it. Drafts stay invisible without the token (ASSUMPTIONS #8).
+39. **Go-live rule:** `draft → live` requires the latest brand proposal
+    approved AND a verified domain — or a staff "force" for
+    platform-subdomain-only tenants. Domain verification triggers the flip
+    automatically once the gate has passed (2.5), from the polling job.
+
+## Domains
+
+40. **Registrar instructions are DNS records (CNAME + ownership TXT), not
+    nameserver transfers** — that's how Cloudflare for SaaS custom hostnames
+    actually work; the client keeps their DNS. Instructions are
+    registrar-specific click-paths (GoDaddy/Namecheap/Squarespace/Cloudflare/
+    IONOS/NetSol + a generic fallback). Chase cadence: every 3 days,
+    automatic, with a staff alert (2.5: "clients are slow at this").
+41. **The demo hostname provider simulates verification.** Designed as a
+    ~90s in-memory soak, but Next instantiates the module per route bundle,
+    so in practice demo domains verify on the FIRST jobs run (unknown id →
+    optimistic active). Kept as-is: the local flow still exercises
+    provision → poll → verified → notify → go-live, just without the delay.
+    Live mode = `CLOUDFLARE_ZONE_ID` + the token secret; zone-without-token
+    throws (D11 half-configured rule applied to platform adapters).
+
+## Billing
+
+42. **v1 Stripe scope is webhook ingest + sync.** Subscriptions get created
+    in the Stripe dashboard (Session 4 runbook); metadata.tenant_slug links
+    the customer on first event. Price ids map to plan tiers and feature
+    flags via `STRIPE_PRICE_MAP` (demo ids default). Sync only touches flags
+    the map knows — intake checkboxes and custom flags survive.
+43. **The demo Stripe provider is only selectable when the webhook secret is
+    absent** and only accepts `stripe-signature: demo` — a deployment with
+    the real secret can never fall back to accepting unsigned events.
+    `npm run stripe:simulate` drives it; `--days-ago` backdates
+    `event.created` so the dunning ladder is testable without waiting 14 days.
+44. **Nothing automated ever suspends:** dunning (day 3/7/14 warnings from
+    `first_failed_at`) ends by CREATING a `pending_actions` row; only
+    `approveSuspension` (a staff click in the queue) or a manual staff
+    action writes `status='suspended'`. `invoice.paid` auto-dismisses a
+    pending suspension — recovered clients never meet the gate.
+
+## Watching / jobs
+
+45. **The suspended-tenant gate is layout-level (Session 1 design):** the
+    visible page is the under-construction screen and nothing else, but the
+    HTML's RSC flight payload still serializes the (public, marketing-only)
+    child page. Accepted for v1 since nothing non-public renders through
+    that path; revisit if that ever changes. The e2e asserts on the
+    rendered DOM.
+46. **Two Next-16 gotchas cost real time and are now conventions:**
+    (a) server-action `redirect()` streams the target rendered WITHOUT the
+    browser's Host header — on a host-routed app that is the WRONG surface;
+    auth flows therefore return a `done` state and hard-navigate
+    client-side. (b) Dynamic admin pages keep a stale RSC payload after a
+    plain form action; every staff mutation calls
+    `revalidatePath("/admin", "layout")` (`refreshAdmin()`).
+47. **Jobs run in-process** (`POST /api/jobs/run`, CRON_TOKEN or staff
+    session; `npm run jobs` is an HTTP trigger) because they use the app's
+    adapters and cache. Deliverability checks skip `.test`/`.localhost`
+    domains (ok=NULL, "skipped" recorded) rather than fake a result. The
+    synthetic form check exercises the tenant-scoped DB write path + the
+    real email adapter and cross-checks the row landed in the right tenant;
+    the HTTP form layer is covered by the Playwright suite instead.
+48. **Zero-submission alarm semantics:** baseline = any non-demo,
+    non-synthetic lead ever; fires at 14 quiet days; deduped against the
+    open alert so it fires once per incident, not once per jobs run.
+49. **Fleet dashboard honesty:** CWV column reads "n/a (S4)" until real-user
+    monitoring exists; uptime/failover joins when Session 4's health checks
+    write `failover` alerts. The fire-score sort is a first guess, per
+    Part 0 — expected to be rewritten after four real clients.
+
+## Content & offboarding
+
+50. **Content seeding voice/consent order:** consented transcript →
+    intake voice field; an UNCONSENTED transcript is a hard refusal
+    (ConsentError), surfaced in the admin UI, proven by e2e against a
+    seeded bad-data tenant. Generator: claude-opus-4-8 via raw fetch when
+    `curbside-anthropic-api-key` resolves, else deterministic templates
+    (the pipeline must work offline). Posts land UNPUBLISHED always;
+    tagline/about apply directly only while the tenant is still draft
+    (the go-live review covers them) — live tenants' site copy belongs to
+    Session 3's pipeline.
+51. **Offboarding writes the exit DATA now, the exit REPORT in Session 3:**
+    JSON + leads CSV under `.data/exports/<slug>/`, shaped so the
+    monthly-report renderer (GROWTH Part 5) can produce the formatted exit
+    report from the same file (D20: build it once). Secret purge = the
+    manifest of vault names + integrations flipped to demo; actual vault
+    deletion automates in Session 4 when a vault exists. Transcripts and
+    recording pointers are hard-deleted, not archived.
+52. **Staff-decision FKs are ON DELETE SET NULL** (migration 004): removing
+    a staff account never blocks on, or cascades into, decision history —
+    the durable "who" is the email in audit_log.
