@@ -6,21 +6,44 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:seed": "tsx scripts/seed.ts",
+    "export:static": "tsx scripts/export-static.ts",
+    "fetch:reviews": "tsx scripts/fetch-reviews.ts",
+    "images:source": "tsx scripts/source-images.ts",
+    "fetch:instagram": "tsx scripts/fetch-instagram.ts",
+    "test:rls": "vitest run tests/rls-isolation.test.ts",
+    "test:e2e": "playwright test",
+    "verify": "npm run build && npm run test:rls && npm run test:e2e"
   },
   "dependencies": {
     "next": "16.2.10",
+    "pg": "^8.22.0",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.12.1",
+    "@img/sharp-win32-x64": "^0.34.5",
+    "@playwright/test": "^1.61.1",
+    "@rolldown/binding-win32-x64-msvc": "^1.1.5",
+    "@tailwindcss/oxide-win32-x64-msvc": "^4.3.2",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@types/pg": "^8.20.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "dotenv": "^17.4.2",
     "eslint": "^9",
     "eslint-config-next": "16.2.10",
+    "lightningcss-win32-x64-msvc": "^1.32.0",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "tsx": "^4.23.0",
+    "typescript": "^5",
+    "vitest": "^4.1.10"
   }
 }

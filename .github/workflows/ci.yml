@@ -1,0 +1,57 @@
+# CI gates (ARCHITECTURE Invariants 2 and 8):
+#   - the cross-tenant RLS test runs UNCONDITIONALLY; deleting or skipping it
+#     fails this workflow by absence (the step would error on a missing file)
+#   - the axe accessibility suite fails the build on any violation
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: curbside
+          POSTGRES_USER: curbside_owner
+          POSTGRES_PASSWORD: curbside_owner_dev
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U curbside_owner -d curbside"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://curbside_app:curbside_app_dev@localhost:5432/curbside
+      DATABASE_URL_OWNER: postgres://curbside_owner:curbside_owner_dev@localhost:5432/curbside
+      PLATFORM_APEX: localhost
+      STAFF_STATUS_TOKEN: ci-status-token
+      ALLOW_ENV_SECRETS: "1"
+      UPLOAD_DIR: .data/uploads
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run db:migrate
+      - run: npm run db:seed
+
+      - name: Guard — the RLS isolation test must exist (Invariant 2)
+        run: test -f tests/rls-isolation.test.ts
+
+      - run: npm run build
+
+      - name: Cross-tenant isolation (D4) — the highest-severity gate
+        run: npm run test:rls
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Smoke + lifecycle + axe accessibility gate (D12)
+        run: npm run test:e2e

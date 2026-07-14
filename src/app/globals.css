@@ -1,26 +1,146 @@
 @import "tailwindcss";
 
+/*
+ * Semantic tokens only. Values are injected per tenant by brand.ts into a
+ * <style> block in the tenant layout; these :root values are the neutral
+ * fallback so unknown-host and error pages still render.
+ * NO RAW HEX IN COMPONENTS — everything goes through a token (Part 6).
+ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --brand: #1f2937;
+  --brand-dark: #111827;
+  --surface: #ffffff;
+  --surface-raised: #f3f4f6;
+  --ink: #111827;
+  --ink-muted: #4b5563;
+  --edge: #d1d5db;
+  --accent: #b45309;
+  --on-brand: #ffffff;
+  --on-brand-dark: #ffffff;
+  --on-accent: #ffffff;
+  --font-display: system-ui, sans-serif;
+  --font-body: system-ui, sans-serif;
+  --display-case: none;
+  --display-tracking: 0;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-*: initial;
+  --color-brand: var(--brand);
+  --color-brand-dark: var(--brand-dark);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-edge: var(--edge);
+  --color-accent: var(--accent);
+  --color-on-brand: var(--on-brand);
+  --color-on-brand-dark: var(--on-brand-dark);
+  --color-on-accent: var(--on-accent);
+  --color-white: #ffffff;
+  --color-black: #000000;
+  --color-transparent: transparent;
+  --font-display: var(--font-display);
+  --font-body: var(--font-body);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Display type takes a position: big, confident, engineered (Part 6). */
+.font-display {
+  text-transform: var(--display-case);
+  letter-spacing: var(--display-tracking);
+  line-height: 0.95;
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Prose styles for blog/service bodies rendered from markdown. */
+.prose-tenant {
+  max-width: 68ch;
+}
+.prose-tenant h2 {
+  font-family: var(--font-display);
+  text-transform: var(--display-case);
+  letter-spacing: var(--display-tracking);
+  font-size: 1.75rem;
+  margin: 2.25rem 0 0.75rem;
+  line-height: 1.1;
+}
+.prose-tenant h3 {
+  font-weight: 700;
+  font-size: 1.2rem;
+  margin: 1.75rem 0 0.5rem;
+}
+.prose-tenant p {
+  margin: 1rem 0;
+  line-height: 1.75;
+}
+.prose-tenant ul,
+.prose-tenant ol {
+  margin: 1rem 0 1rem 1.25rem;
+  line-height: 1.7;
+}
+.prose-tenant ul {
+  list-style: disc;
+}
+.prose-tenant ol {
+  list-style: decimal;
+}
+.prose-tenant li {
+  margin: 0.35rem 0;
+}
+.prose-tenant a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.prose-tenant strong {
+  font-weight: 700;
+}
+.prose-tenant blockquote {
+  border-left: 3px solid var(--accent);
+  padding-left: 1rem;
+  color: var(--ink-muted);
+  margin: 1.25rem 0;
+}
+.prose-tenant table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.25rem 0;
+  font-size: 0.95rem;
+}
+.prose-tenant th,
+.prose-tenant td {
+  border: 1px solid var(--edge);
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+}
+.prose-tenant code {
+  background: var(--surface-raised);
+  padding: 0.15rem 0.35rem;
+  border-radius: 0.25rem;
+  font-size: 0.9em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

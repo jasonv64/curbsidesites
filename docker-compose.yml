@@ -1,0 +1,23 @@
+# Local Postgres for Curbside Sites. Matches the container the quickstart
+# expects (name: curbside-postgres). Production is Azure Database for
+# PostgreSQL Flexible Server (D3) — provisioned in Session 4's RUNBOOK.md.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: curbside-postgres
+    environment:
+      POSTGRES_DB: curbside
+      POSTGRES_USER: curbside_owner
+      POSTGRES_PASSWORD: curbside_owner_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - curbside-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U curbside_owner -d curbside"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  curbside-pgdata:

@@ -39,3 +39,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local data: uploads + failover snapshots (blob storage in production)
+/.data/
+
+# playwright
+/test-results/
+/playwright-report/
