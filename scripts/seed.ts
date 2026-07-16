@@ -94,6 +94,9 @@ const INTEGRATION_KEYS: [key: string, owner: string, config: Json][] = [
   ["quote_assistant", "curbside", {}],
   ["call_tracking", "curbside", {}],
   ["change_request_ai", "curbside", {}],
+  // Growth plane (Session 3)
+  ["gbp", "client", {}],
+  ["rank_tracking", "curbside", {}],
 ];
 
 async function insertIntegrations(db: Client, tenantId: string, slug: string) {

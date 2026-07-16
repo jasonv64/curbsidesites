@@ -350,3 +350,84 @@ export async function runJobsAction(_prev: ActionState, _formData: FormData): Pr
     .map(([k, v]) => `${k}: ${JSON.stringify(v)}`);
   return { status: "ok", message: `Checks ran — ${parts.join(" · ")}` };
 }
+
+// ---------------------------------------------------------------------------
+// Growth plane (Session 3, GROWTH-PLANE.md)
+// ---------------------------------------------------------------------------
+
+export async function generateReportAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  const s = await staff();
+  const tenantId = str(formData, "tenant_id");
+  const kind = str(formData, "kind") === "sample" ? ("sample" as const) : ("monthly" as const);
+  const { lastCompleteMonth, parsePeriodKey } = await import("@/lib/growth/period");
+  const { generateReport, renderReportPdf } = await import("@/lib/growth/report-run");
+  const period = parsePeriodKey(str(formData, "period")) ?? lastCompleteMonth();
+  try {
+    const report = await generateReport(tenantId, period, kind, s.email);
+    const pdf = await renderReportPdf(report.id).catch(() => null);
+    refreshAdmin();
+    return {
+      status: "ok",
+      message: `${kind} report for ${period.label} generated (${report.data.contacts.total} contacts)${pdf ? " · PDF written" : " · PDF skipped (no chromium)"}. Read it before it sends.`,
+    };
+  } catch (e) {
+    refreshAdmin();
+    return { status: "error", message: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export async function sendReportAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  const s = await staff();
+  const reportId = str(formData, "report_id");
+  const { sendReport } = await import("@/lib/growth/report-run");
+  try {
+    const result = await sendReport(reportId, s.email);
+    refreshAdmin();
+    return "skipped" in result
+      ? { status: "error", message: `Not sent: ${result.skipped}` }
+      : { status: "ok", message: `Sent to ${result.to} (${result.delivered}). The report is now immutable.` };
+  } catch (e) {
+    refreshAdmin();
+    return { status: "error", message: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** The two honest lines a human adds to the next report (never invented). */
+export async function saveReportNotesAction(formData: FormData): Promise<void> {
+  const s = await staff();
+  const tenantId = str(formData, "tenant_id");
+  await controlQuery(
+    `INSERT INTO report_notes (tenant_id, why_note, next_note, updated_at)
+     VALUES ($1, $2, $3, now())
+     ON CONFLICT (tenant_id) DO UPDATE SET why_note = $2, next_note = $3, updated_at = now()`,
+    [tenantId, str(formData, "why_note") || null, str(formData, "next_note") || null]
+  );
+  await audit(s.email, tenantId, "report.notes_saved", {});
+  refreshAdmin();
+}
+
+export async function addTermAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  const s = await staff();
+  const tenantId = str(formData, "tenant_id");
+  const term = str(formData, "term");
+  if (!term) return { status: "error", message: "Term is empty." };
+  const { addTrackedTerm } = await import("@/lib/growth/rank-tracking");
+  try {
+    await addTrackedTerm(tenantId, term);
+    await audit(s.email, tenantId, "rank.term_added", { term });
+    refreshAdmin();
+    return { status: "ok", message: `Tracking “${term}”.` };
+  } catch (e) {
+    return { status: "error", message: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export async function retireTermAction(formData: FormData): Promise<void> {
+  const s = await staff();
+  const tenantId = str(formData, "tenant_id");
+  const termId = str(formData, "term_id");
+  const { retireTrackedTerm } = await import("@/lib/growth/rank-tracking");
+  await retireTrackedTerm(tenantId, termId);
+  await audit(s.email, tenantId, "rank.term_retired", { term_id: termId });
+  refreshAdmin();
+}

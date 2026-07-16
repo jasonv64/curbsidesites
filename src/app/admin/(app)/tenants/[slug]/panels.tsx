@@ -7,9 +7,12 @@
  */
 import { useActionState } from "react";
 import {
+  addTermAction,
+  generateReportAction,
   goLiveAction,
   provisionDomainAction,
   seedContentAction,
+  sendReportAction,
   uploadTranscriptAction,
   type ActionState,
 } from "../../actions";
@@ -83,6 +86,56 @@ export function TranscriptPanel({ tenantId, callId }: { tenantId: string; callId
       </label>
       <button type="submit" disabled={pending} className="self-start rounded border border-edge px-3 py-1.5 text-sm font-semibold hover:text-accent disabled:opacity-60">
         {pending ? "Checking consent chain…" : "Store transcript"}
+      </button>
+      <Feedback state={state} />
+    </form>
+  );
+}
+
+export function GenerateReportPanel({ tenantId, defaultPeriod }: { tenantId: string; defaultPeriod: string }) {
+  const [state, action, pending] = useActionState(generateReportAction, idle);
+  return (
+    <form action={action} className="flex flex-wrap items-center gap-2">
+      <input type="hidden" name="tenant_id" value={tenantId} />
+      <input
+        name="period"
+        defaultValue={defaultPeriod}
+        aria-label="Report period (YYYY-MM)"
+        className={`${inputCls} w-28`}
+      />
+      <select name="kind" aria-label="Report kind" className={inputCls} defaultValue="monthly">
+        <option value="monthly">monthly (real data)</option>
+        <option value="sample">sample (demo data, stamped)</option>
+      </select>
+      <button type="submit" disabled={pending} className="rounded border border-edge px-3 py-1.5 text-sm font-semibold hover:text-accent disabled:opacity-60">
+        {pending ? "Assembling…" : "Generate report"}
+      </button>
+      <Feedback state={state} />
+    </form>
+  );
+}
+
+export function SendReportPanel({ reportId }: { reportId: string }) {
+  const [state, action, pending] = useActionState(sendReportAction, idle);
+  return (
+    <form action={action} className="flex items-center gap-2">
+      <input type="hidden" name="report_id" value={reportId} />
+      <button type="submit" disabled={pending} className="rounded border border-edge px-2 py-1 text-xs font-semibold hover:text-accent disabled:opacity-60">
+        {pending ? "Sending…" : "Send to owner"}
+      </button>
+      <Feedback state={state} />
+    </form>
+  );
+}
+
+export function AddTermPanel({ tenantId }: { tenantId: string }) {
+  const [state, action, pending] = useActionState(addTermAction, idle);
+  return (
+    <form action={action} className="flex flex-wrap items-center gap-2">
+      <input type="hidden" name="tenant_id" value={tenantId} />
+      <input name="term" placeholder="lift kits victorville" aria-label="Search term to track" className={inputCls} />
+      <button type="submit" disabled={pending} className="rounded border border-edge px-3 py-1.5 text-sm font-semibold hover:text-accent disabled:opacity-60">
+        {pending ? "Adding…" : "Track term"}
       </button>
       <Feedback state={state} />
     </form>

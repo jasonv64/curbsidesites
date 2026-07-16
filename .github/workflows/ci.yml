@@ -26,6 +26,7 @@ jobs:
     env:
       DATABASE_URL: postgres://curbside_app:curbside_app_dev@localhost:5432/curbside
       DATABASE_URL_OWNER: postgres://curbside_owner:curbside_owner_dev@localhost:5432/curbside
+      DATABASE_URL_CONTROL: postgres://curbside_control:curbside_control_dev@localhost:5432/curbside
       PLATFORM_APEX: localhost
       STAFF_STATUS_TOKEN: ci-status-token
       ALLOW_ENV_SECRETS: "1"
@@ -50,8 +51,15 @@ jobs:
       - name: Cross-tenant isolation (D4) — the highest-severity gate
         run: npm run test:rls
 
+      - name: Growth plane — scheduler/quota/NAP-invariant gates (Session 3)
+        run: npm run test:growth
+
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
+
+      # After the browser install so the sample-report PDF renders; the axe
+      # suite audits the generated report artifact (GROWTH Part 5 + D12).
+      - run: npm run db:seed:growth
 
       - name: Smoke + lifecycle + axe accessibility gate (D12)
         run: npm run test:e2e

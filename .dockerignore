@@ -1,0 +1,11 @@
+node_modules
+.next
+.data
+.git
+.env
+.env.*
+test-results
+playwright-report
+infra
+*.md
+!README.md

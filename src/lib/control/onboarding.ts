@@ -76,6 +76,10 @@ const INTEGRATION_KEYS: [key: string, owner: string][] = [
   ["quote_assistant", "curbside"],
   ["call_tracking", "curbside"],
   ["change_request_ai", "curbside"],
+  // Growth plane (Session 3). gbp is client-owned: manager access, never
+  // their login (D8). Existing tenants were backfilled by migration 005.
+  ["gbp", "client"],
+  ["rank_tracking", "curbside"],
 ];
 
 /** Default image slot manifest, queries tuned to trade + town (Part 10). */

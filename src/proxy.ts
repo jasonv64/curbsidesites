@@ -17,7 +17,15 @@ const PREVIEW_COOKIE = "cs_preview";
 
 export default function proxy(request: NextRequest) {
   const url = request.nextUrl;
-  const host = request.headers.get("host");
+  // Behind the Cloudflare edge Worker (Session 4), Host is the Container Apps
+  // FQDN (that's how ACA ingress routes) and the visitor's real hostname rides
+  // in X-Forwarded-Host. Only trusted when TRUST_PROXY_HOST=1 — locally an
+  // attacker-supplied X-Forwarded-Host must stay meaningless.
+  const forwardedHost =
+    process.env.TRUST_PROXY_HOST === "1"
+      ? request.headers.get("x-forwarded-host")?.split(",")[0]?.trim() || null
+      : null;
+  const host = forwardedHost ?? request.headers.get("host");
 
   // The image optimizer fetches /uploads/<slug>/<file> through an internal
   // mock request that carries NO Host header (Next 16, fetchInternalImage).
@@ -58,6 +66,13 @@ export default function proxy(request: NextRequest) {
   if (preview) {
     const clean = url.clone();
     clean.searchParams.delete("preview");
+    // nextUrl carries the ACA-internal host when we're behind the edge Worker;
+    // redirect the visitor to the hostname they actually asked for.
+    if (forwardedHost) {
+      clean.protocol = "https:";
+      clean.host = forwardedHost;
+      clean.port = "";
+    }
     const res = NextResponse.redirect(clean);
     res.cookies.set(PREVIEW_COOKIE, preview, {
       httpOnly: true,
@@ -75,7 +90,8 @@ export default function proxy(request: NextRequest) {
 
 export const config = {
   // Everything except: platform-level API routes (status, Stripe webhooks,
-  // job runner), Next internals, and the favicon. robots/sitemap/llms/feed
-  // are per-tenant and DO get rewritten — route handlers under /s/[host].
-  matcher: ["/((?!api/status|api/stripe|api/jobs|_next/|favicon\\.ico).*)"],
+  // job runner, health probe), Next internals, and the favicon.
+  // robots/sitemap/llms/feed are per-tenant and DO get rewritten — route
+  // handlers under /s/[host].
+  matcher: ["/((?!api/status|api/stripe|api/jobs|api/health|_next/|favicon\\.ico).*)"],
 };

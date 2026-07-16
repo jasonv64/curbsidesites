@@ -15,6 +15,7 @@ export default function PortalLayout({ children }: LayoutProps<"/s/[host]/portal
         <nav aria-label="Portal" className="flex flex-wrap gap-4 text-sm font-bold">
           <Link href="/portal" className="text-ink-muted hover:text-ink">Overview</Link>
           <Link href="/portal/leads" className="text-ink-muted hover:text-ink">Leads</Link>
+          <Link href="/portal/reports" className="text-ink-muted hover:text-ink">Reports</Link>
           <Link href="/portal/content" className="text-ink-muted hover:text-ink">Posts</Link>
           <Link href="/portal/settings" className="text-ink-muted hover:text-ink">Hours &amp; services</Link>
           <Link href="/portal/chat" className="text-ink-muted hover:text-ink">Request a change</Link>

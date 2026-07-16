@@ -66,6 +66,32 @@ their billing). `curbside` = platform-level service on our account.
 | `STAFF_ADMIN_PASSWORD` (env, seed-time only) | Password for the first staff user created by `npm run db:seed:fleet`. | Choose one; if unset the seed prints a generated one ONCE. | Nothing at runtime — it's only read by the seed. |
 | `STRIPE_PRICE_MAP` (env, not secret) | JSON map of real Stripe price ids → plan tier / feature flag / MRR (D19). | Stripe dashboard product prices (Session 4). | Demo price ids (`price_curb`, `price_addon_crm`, …) apply — correct locally, wrong against a real Stripe account. |
 
+## Session 4 — production wiring
+
+The Key Vault provider is live (`src/lib/secrets.ts`): set
+`SECRET_PROVIDER=keyvault` + `AZURE_KEY_VAULT_NAME`, authenticated by
+DefaultAzureCredential (managed identity on Container Apps, `az login` on a
+laptop). Values are cached ~5 minutes, so rotation lands within that window
+with no deploy. RUNBOOK.md Phase 3 provisions the vault; Phase 5.6 proves
+the app reads a secret and that no endpoint returns a value.
+
+Infrastructure secrets now held IN Key Vault and surfaced to the app as
+Container Apps secret-references (never plain env values):
+
+| KV name | Feeds env var |
+|---|---|
+| `curbside-app-database-url` | `DATABASE_URL` |
+| `curbside-control-database-url` | `DATABASE_URL_CONTROL` |
+| `staff-status-token` | `STAFF_STATUS_TOKEN` |
+| `staff-totp-enc-key` | `STAFF_TOTP_ENC_KEY` |
+| `cron-token` | `CRON_TOKEN` (also injected into the tick job) |
+
+One deliberate duplicate: the edge Worker (`infra/cloudflare/`) holds its
+own copy of the Resend key (`wrangler secret put RESEND_API_KEY`) for
+failover alert emails — the Worker must be able to alert precisely when
+the app (and its Key Vault access) is the thing that's down. Rotating the
+Resend key means rotating it in **both** places.
+
 ## Rotation
 
 Rotate by writing the new value to the same ref (Key Vault versioning keeps

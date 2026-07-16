@@ -13,10 +13,22 @@ import {
   recordVerbalConsentAction,
   rejectBrandAction,
   restoreAction,
+  retireTermAction,
+  saveReportNotesAction,
   suspendAction,
   withdrawConsentAction,
 } from "../../actions";
-import { GoLivePanel, ProvisionDomainPanel, SeedContentPanel, TranscriptPanel } from "./panels";
+import {
+  AddTermPanel,
+  GenerateReportPanel,
+  GoLivePanel,
+  ProvisionDomainPanel,
+  SeedContentPanel,
+  SendReportPanel,
+  TranscriptPanel,
+} from "./panels";
+import { lastCompleteMonth, periodKey } from "@/lib/growth/period";
+import type { ReportData } from "@/lib/growth/report";
 
 export const dynamic = "force-dynamic";
 
@@ -60,6 +72,36 @@ export default async function TenantDetail({ params }: { params: Promise<{ slug:
       controlQuery("SELECT id, kind, reason, status, created_at FROM pending_actions WHERE tenant_id = $1 AND status = 'pending'", [tenant.id]),
       controlQuery("SELECT actor, action, detail, created_at FROM audit_log WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 12", [tenant.id]),
     ]);
+
+  // Growth plane (Session 3): reports, tracked terms, NAP drift, schedule.
+  const [reports, terms, napChecks, growthSchedule, reportNotes] = await Promise.all([
+    controlQuery<{ id: string; kind: string; data: ReportData; generated_at: string; sent_at: string | null; pdf_path: string | null }>(
+      "SELECT id, kind, data, generated_at, sent_at, pdf_path FROM reports WHERE tenant_id = $1 ORDER BY period_start DESC, kind LIMIT 12",
+      [tenant.id]
+    ),
+    controlQuery<{ id: string; term: string; position: number | null; is_demo: boolean | null }>(
+      `SELECT tt.id, tt.term, rs.position, rs.is_demo
+         FROM tracked_terms tt
+         LEFT JOIN LATERAL (
+           SELECT position, is_demo FROM rank_snapshots WHERE term_id = tt.id ORDER BY checked_on DESC LIMIT 1
+         ) rs ON true
+        WHERE tt.tenant_id = $1 AND tt.retired_at IS NULL ORDER BY tt.created_at`,
+      [tenant.id]
+    ),
+    controlQuery<{ surface: string; ok: boolean | null; checked_at: string }>(
+      `SELECT DISTINCT ON (surface) surface, ok, checked_at
+         FROM nap_checks WHERE tenant_id = $1 ORDER BY surface, checked_at DESC`,
+      [tenant.id]
+    ),
+    controlQuery<{ job: string; next_run_at: string; last_run_at: string | null; last_status: string | null; backoff_level: number }>(
+      "SELECT job, next_run_at, last_run_at, last_status, backoff_level FROM growth_schedule WHERE tenant_id = $1 ORDER BY job",
+      [tenant.id]
+    ),
+    controlOne<{ why_note: string | null; next_note: string | null }>(
+      "SELECT why_note, next_note FROM report_notes WHERE tenant_id = $1",
+      [tenant.id]
+    ),
+  ]);
 
   const integrationsWithSecrets = await Promise.all(
     integrations.map(async (i) => ({ ...i, secret_ok: await secretPopulated(i.kv_secret_ref) }))
@@ -361,6 +403,106 @@ export default async function TenantDetail({ params }: { params: Promise<{ slug:
             Suspension is never automatic: dunning prepares a pending action after day 14; a human
             approves it in the queue. Simulate locally: npm run stripe:simulate — see README.
           </p>
+        </Section>
+        <Section title="Monthly report (GROWTH Part 5 — the product)">
+          <GenerateReportPanel tenantId={tenant.id} defaultPeriod={periodKey(lastCompleteMonth())} />
+          {reports.length === 0 ? (
+            <p className="text-sm text-ink-muted">
+              No reports yet. The scheduler generates + sends automatically after each month ends;
+              this button is for previews, samples, and catch-ups.
+            </p>
+          ) : (
+            <ul className="flex flex-col gap-1 text-sm">
+              {reports.map((r) => (
+                <li key={r.id} className="flex flex-wrap items-center gap-2 border-t border-edge pt-1">
+                  <strong>{r.kind === "exit" ? "Final" : r.data.period.label}</strong>
+                  <span className="text-ink-muted">
+                    {r.data.contacts.total} contacts · {r.kind}
+                    {r.pdf_path ? " · PDF ✓" : ""}
+                  </span>
+                  <Link href={`/tenants/${tenant.slug}/report/${r.id}`} className="text-accent underline">
+                    read
+                  </Link>
+                  {r.sent_at ? (
+                    <span className="text-xs text-ink-muted">sent {new Date(r.sent_at).toISOString().slice(0, 10)} (immutable)</span>
+                  ) : r.kind === "sample" ? (
+                    <span className="text-xs text-ink-muted">sample — never emailed</span>
+                  ) : (
+                    <SendReportPanel reportId={r.id} />
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+          <form action={saveReportNotesAction} className="flex flex-col gap-2 border-t border-edge pt-2">
+            <input type="hidden" name="tenant_id" value={tenant.id} />
+            <input
+              name="why_note"
+              defaultValue={reportNotes?.why_note ?? ""}
+              placeholder="Why this month looked the way it did (only if we actually know)"
+              aria-label="Why note for the next report"
+              className={inputCls}
+            />
+            <input
+              name="next_note"
+              defaultValue={reportNotes?.next_note ?? ""}
+              placeholder="What's planned next month (one or two lines)"
+              aria-label="Next month note for the next report"
+              className={inputCls}
+            />
+            <button type="submit" className={`${btn} self-start`}>Save report notes</button>
+            <p className="text-xs text-ink-muted">
+              These two lines land verbatim in the next generated report. Leave blank and the report
+              says the honest default — it never invents an explanation (Invariant 12).
+            </p>
+          </form>
+        </Section>
+
+        <Section title="Growth ops (Parts 7–8)">
+          <p className="text-sm font-semibold">Tracked terms ({terms.length}/20 — modest on purpose)</p>
+          {terms.length > 0 && (
+            <ul className="flex flex-col gap-1 text-sm">
+              {terms.map((t) => (
+                <li key={t.id} className="flex flex-wrap items-center gap-2">
+                  <span>“{t.term}”</span>
+                  <span className="text-ink-muted">
+                    {t.position === null ? "no snapshot yet" : `#${t.position}`}
+                    {t.is_demo ? " (demo)" : ""}
+                  </span>
+                  <form action={retireTermAction}>
+                    <input type="hidden" name="tenant_id" value={tenant.id} />
+                    <input type="hidden" name="term_id" value={t.id} />
+                    <button type="submit" className="text-xs text-ink-muted underline hover:text-accent">retire</button>
+                  </form>
+                </li>
+              ))}
+            </ul>
+          )}
+          <AddTermPanel tenantId={tenant.id} />
+          <p className="mt-2 text-sm font-semibold">NAP drift (latest per surface)</p>
+          {napChecks.length === 0 ? (
+            <p className="text-sm text-ink-muted">No checks yet — the weekly job writes them.</p>
+          ) : (
+            <ul className="text-sm">
+              {napChecks.map((c) => (
+                <li key={c.surface}>
+                  <code className="text-xs">{c.surface}</code> —{" "}
+                  {c.ok === null ? "unchecked (surface unavailable)" : c.ok ? "consistent ✓" : <strong>DRIFT ✗</strong>}
+                  <span className="text-xs text-ink-muted"> · {new Date(c.checked_at).toISOString().slice(0, 10)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="mt-2 text-sm font-semibold">Schedule (staggered per tenant)</p>
+          <ul className="text-xs text-ink-muted">
+            {growthSchedule.map((g) => (
+              <li key={g.job}>
+                {g.job}: next {new Date(g.next_run_at).toISOString().slice(0, 16).replace("T", " ")}
+                {g.last_status ? ` · last ${g.last_status}` : " · never ran"}
+                {g.backoff_level > 0 ? ` · backoff L${g.backoff_level}` : ""}
+              </li>
+            ))}
+          </ul>
         </Section>
       </div>
 

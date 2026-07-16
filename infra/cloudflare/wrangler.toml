@@ -1,0 +1,21 @@
+# Curbside edge router (RUNBOOK.md Phase 6).
+# Deploy:  npx wrangler deploy   (from this directory, after `npx wrangler login`)
+# Secret:  npx wrangler secret put RESEND_API_KEY   (optional — failover alerts)
+name = "curbside-edge"
+main = "worker.js"
+compatibility_date = "2026-07-01"
+
+# `*/*` catches ALL traffic entering the zone — the platform subdomains, the
+# admin, AND Cloudflare-for-SaaS custom hostnames (client domains).
+routes = [
+  { pattern = "*/*", zone_name = "curbsidesites.com" }
+]
+
+[vars]
+# The Container App FQDN — RUNBOOK.md Phase 5 prints it.
+ORIGIN_HOST = "REPLACE-ME.azurecontainerapps.io"
+# The storage account's blob endpoint host — RUNBOOK.md Phase 4.
+SNAPSHOT_HOST = "REPLACE-ME.blob.core.windows.net"
+# Failover alerts (optional but strongly recommended — D6 says alert immediately).
+ALERT_EMAIL = "valadezj045@gmail.com"
+ALERT_FROM = "Curbside Edge <alerts@curbsidesites.com>"

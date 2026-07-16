@@ -1,11 +1,39 @@
 /**
  * Upload storage. Local dev: filesystem under UPLOAD_DIR, served by the
- * /uploads/[...path] route handler. Production: Azure Blob Storage
- * (Session 4 — swap the provider below; callers only see saveUpload()).
+ * /uploads/[...path] route handler. Production: Azure Blob Storage — set
+ * AZURE_STORAGE_ACCOUNT (managed identity / DefaultAzureCredential) or
+ * AZURE_STORAGE_CONNECTION_STRING and uploads land in the public
+ * `tenant-images` container, matching next.config.ts remotePatterns.
+ * Callers only ever see saveUpload(). Provisioned by RUNBOOK.md Phase 4.
  */
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { isAbsolute, join, normalize } from "node:path";
 import { randomUUID } from "node:crypto";
+
+const AZURE_CONTAINER = "tenant-images";
+let azureContainerClient: import("@azure/storage-blob").ContainerClient | null = null;
+
+function azureConfigured(): boolean {
+  return Boolean(process.env.AZURE_STORAGE_ACCOUNT || process.env.AZURE_STORAGE_CONNECTION_STRING);
+}
+
+async function azureContainer() {
+  if (azureContainerClient) return azureContainerClient;
+  const { BlobServiceClient } = await import("@azure/storage-blob");
+  const conn = process.env.AZURE_STORAGE_CONNECTION_STRING;
+  let svc;
+  if (conn) {
+    svc = BlobServiceClient.fromConnectionString(conn);
+  } else {
+    const { DefaultAzureCredential } = await import("@azure/identity");
+    svc = new BlobServiceClient(
+      `https://${process.env.AZURE_STORAGE_ACCOUNT}.blob.core.windows.net`,
+      new DefaultAzureCredential()
+    );
+  }
+  azureContainerClient = svc.getContainerClient(AZURE_CONTAINER);
+  return azureContainerClient;
+}
 
 // Statically scoped under cwd so the build tracer doesn't pull the world in.
 const uploadRoot = () => {
@@ -27,6 +55,23 @@ export async function saveUpload(
   if (!ext) return { error: "Only JPEG, PNG, or WebP images are accepted." };
   if (file.size > 10 * 1024 * 1024) return { error: "Images must be under 10 MB." };
   const name = `${randomUUID()}.${ext}`;
+  if (azureConfigured()) {
+    try {
+      const container = await azureContainer();
+      const blob = container.getBlockBlobClient(`${tenantSlug}/${name}`);
+      await blob.uploadData(Buffer.from(await file.arrayBuffer()), {
+        blobHTTPHeaders: {
+          blobContentType: file.type,
+          // Blob names are UUIDs — safe to cache forever.
+          blobCacheControl: "public, max-age=31536000, immutable",
+        },
+      });
+      return { publicPath: blob.url };
+    } catch (e) {
+      console.error(`[blob] Azure upload failed for ${tenantSlug}: ${(e as Error).message}`);
+      return { error: "Image upload is briefly unavailable — try again in a minute." };
+    }
+  }
   const dir = join(uploadRoot(), tenantSlug);
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, name), Buffer.from(await file.arrayBuffer()));

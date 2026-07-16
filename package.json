@@ -10,17 +10,25 @@
     "db:migrate": "tsx scripts/migrate.ts",
     "db:seed": "tsx scripts/seed.ts",
     "db:seed:fleet": "tsx scripts/seed-fleet.ts",
+    "db:seed:growth": "tsx scripts/seed-growth.ts",
+    "report": "tsx scripts/generate-report.ts",
     "jobs": "tsx scripts/run-jobs.ts",
     "stripe:simulate": "tsx scripts/simulate-stripe.ts",
     "export:static": "tsx scripts/export-static.ts",
+    "snapshots:upload": "tsx scripts/upload-snapshots.ts",
+    "staff:create": "tsx scripts/create-staff.ts",
     "fetch:reviews": "tsx scripts/fetch-reviews.ts",
     "images:source": "tsx scripts/source-images.ts",
     "fetch:instagram": "tsx scripts/fetch-instagram.ts",
     "test:rls": "vitest run tests/rls-isolation.test.ts",
+    "test:growth": "vitest run tests/growth-scheduler.test.ts tests/nap-invariant.test.ts tests/growth-quota.test.ts",
     "test:e2e": "playwright test",
-    "verify": "npm run build && npm run test:rls && npm run test:e2e"
+    "verify": "npm run build && npm run test:rls && npm run test:growth && npm run test:e2e"
   },
   "dependencies": {
+    "@azure/identity": "^4.13.0",
+    "@azure/keyvault-secrets": "^4.10.0",
+    "@azure/storage-blob": "^12.29.0",
     "next": "16.2.10",
     "pg": "^8.22.0",
     "react": "19.2.4",
@@ -31,10 +39,7 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.12.1",
-    "@img/sharp-win32-x64": "^0.34.5",
     "@playwright/test": "^1.61.1",
-    "@rolldown/binding-win32-x64-msvc": "^1.1.5",
-    "@tailwindcss/oxide-win32-x64-msvc": "^4.3.2",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/pg": "^8.20.0",
@@ -43,10 +48,19 @@
     "dotenv": "^17.4.2",
     "eslint": "^9",
     "eslint-config-next": "16.2.10",
-    "lightningcss-win32-x64-msvc": "^1.32.0",
     "tailwindcss": "^4",
     "tsx": "^4.23.0",
     "typescript": "^5",
     "vitest": "^4.1.10"
+  },
+  "optionalDependencies": {
+    "@img/sharp-linux-x64": "^0.34.5",
+    "@img/sharp-win32-x64": "^0.34.5",
+    "@rolldown/binding-linux-x64-gnu": "^1.1.5",
+    "@rolldown/binding-win32-x64-msvc": "^1.1.5",
+    "@tailwindcss/oxide-linux-x64-gnu": "^4.3.2",
+    "@tailwindcss/oxide-win32-x64-msvc": "^4.3.2",
+    "lightningcss-linux-x64-gnu": "^1.32.0",
+    "lightningcss-win32-x64-msvc": "^1.32.0"
   }
 }

@@ -41,6 +41,7 @@ const INTEGRATION_KEYS: [string, string][] = [
   ["analytics", "curbside"], ["email", "curbside"], ["newsletter", "curbside"],
   ["payments", "client"], ["booking", "curbside"], ["quote_assistant", "curbside"],
   ["call_tracking", "curbside"], ["change_request_ai", "curbside"],
+  ["gbp", "client"], ["rank_tracking", "curbside"], // growth plane (Session 3)
 ];
 
 interface FleetTenant {

@@ -68,6 +68,19 @@ export async function offboardTenant(tenantId: string, actor: string): Promise<O
     ),
     "utf8"
   );
+  // The formatted exit report (D20): the monthly-report artifact with the
+  // numbers ending — same generator, same renderer, built once (Session 3).
+  try {
+    const { generateExitReport } = await import("@/lib/growth/report-run");
+    const { renderReportHtml } = await import("@/lib/growth/report-html");
+    const exitReport = await generateExitReport(tenantId, actor);
+    await writeFile(join(exportDir, `${stamp}-exit-report.html`), renderReportHtml(exitReport.data), "utf8");
+  } catch (e) {
+    // The export must complete even if the report generator hiccups; the
+    // frozen data above is sufficient to regenerate it later.
+    console.error("[offboard] exit report generation failed (export continues):", e);
+  }
+
   // Leads also as CSV — the format a shop owner can actually open.
   const csv = [
     "name,email,phone,service,status,source,created_at",

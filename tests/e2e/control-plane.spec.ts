@@ -144,7 +144,7 @@ test("12.2a: public intake form → immediately browsable draft tenant, zero hum
   expect(rows.proposals).toBe(1);
   expect(rows.calls).toBe(1);
   expect(rows.intake).toBe(1);
-  expect(rows.integrations).toBe(11);
+  expect(rows.integrations).toBe(13); // 11 from Session 2 + gbp + rank_tracking (Session 3)
   expect(rows.services).toBe(1);
 });
 

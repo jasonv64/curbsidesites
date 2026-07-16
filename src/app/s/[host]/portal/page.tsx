@@ -67,13 +67,25 @@ export default async function PortalHome({
   const data = await withTenant(bundle.tenant.id, async (db) => {
     const newLeads = await db.one("SELECT count(*)::int AS n FROM leads WHERE is_demo = false AND status = 'new'");
     const subs = await db.one("SELECT count(*)::int AS n FROM subscribers WHERE is_demo = false");
-    // 30-day conversions (D14): the numbers that mean "did the site produce work"
-    const conversions = await db.query(
+    // 30-day conversions (D14): the numbers that mean "did the site produce work".
+    // Real events only; a tenant with none yet shows the seeded sample numbers
+    // with the quiet label — never both in one view (D5).
+    let demoConversions = false;
+    let conversions = await db.query(
       `SELECT type, count(*)::int AS n FROM events
-        WHERE created_at > now() - interval '30 days'
+        WHERE created_at > now() - interval '30 days' AND is_demo = false
           AND type IN ('call_tap','form_submit','map_tap')
         GROUP BY type`
     );
+    if (conversions.length === 0) {
+      conversions = await db.query(
+        `SELECT type, count(*)::int AS n FROM events
+          WHERE created_at > now() - interval '30 days' AND is_demo = true
+            AND type IN ('call_tap','form_submit','map_tap')
+          GROUP BY type`
+      );
+      demoConversions = conversions.length > 0;
+    }
     const recentLeads = await db.query<RecentLead>(
       `SELECT id, name, service, status, created_at FROM leads
         WHERE is_demo = false ORDER BY created_at DESC LIMIT 5`
@@ -86,7 +98,7 @@ export default async function PortalHome({
       `SELECT raw_message, status, created_at FROM change_requests
         ORDER BY created_at DESC LIMIT 5`
     );
-    return { newLeads: newLeads?.n ?? 0, subs: subs?.n ?? 0, conversions, recentLeads, posts, changes };
+    return { newLeads: newLeads?.n ?? 0, subs: subs?.n ?? 0, conversions, demoConversions, recentLeads, posts, changes };
   });
 
   const conv = (type: string) => data.conversions.find((c) => c.type === type)?.n ?? 0;
@@ -111,6 +123,11 @@ export default async function PortalHome({
       </div>
 
       {/* The month at a glance — business outcomes, not pageviews (D14) */}
+      {data.demoConversions ? (
+        <p className="mt-6 border-2 border-edge bg-surface-raised p-3 text-sm text-ink-muted">
+          Sample numbers — live tracking replaces these the moment your site records real activity.
+        </p>
+      ) : null}
       <dl className="mt-6 grid gap-px border-2 border-edge bg-edge sm:grid-cols-4">
         {tiles.map((t) => (
           <div key={t.label} className="bg-surface p-6">

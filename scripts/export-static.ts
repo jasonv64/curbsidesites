@@ -16,10 +16,18 @@
  * tap-to-call block (tel: keeps working — D6's whole point).
  *
  * Usage: node server running, then  npm run export:static
+ *
+ * Modes:
+ *   default        — crawl EXPORT_BASE_URL (local server), Host-header addressed.
+ *   EXPORT_DIRECT=1 — crawl https://<hostname> through the public edge. This is
+ *                     the production mode (RUNBOOK.md Phase 7): ACA ingress
+ *                     routes by its own FQDN, so Host-header addressing can't
+ *                     reach the app from outside; the edge Worker can.
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { Client } from "pg";
 import { config as dotenv } from "dotenv";
 dotenv({ path: [".env.local", ".env"] });
@@ -29,15 +37,25 @@ dotenv({ path: [".env.local", ".env"] });
  * spec-forbidden — so Host-addressed multi-tenant requests 404 as "unknown
  * host". node:http has no such rule.
  */
-function get(base: string, path: string, host: string): Promise<{ status: number; body: string }> {
+function get(
+  base: string,
+  path: string,
+  host: string
+): Promise<{ status: number; body: string; headers: Record<string, string | string[] | undefined> }> {
   const u = new URL(base);
+  const request = u.protocol === "https:" ? httpsRequest : httpRequest;
   return new Promise((resolve, reject) => {
-    const req = httpRequest(
-      { hostname: u.hostname, port: u.port || 80, path, headers: { Host: host } },
+    const req = request(
+      {
+        hostname: u.hostname,
+        port: u.port || (u.protocol === "https:" ? 443 : 80),
+        path,
+        headers: { Host: host },
+      },
       (res) => {
         let body = "";
         res.on("data", (c) => (body += c));
-        res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, body, headers: res.headers }));
       }
     );
     req.on("error", reject);
@@ -45,6 +63,7 @@ function get(base: string, path: string, host: string): Promise<{ status: number
   });
 }
 
+const DIRECT = process.env.EXPORT_DIRECT === "1";
 const BASE = process.env.EXPORT_BASE_URL ?? "http://127.0.0.1:3000";
 const OUT = join(process.cwd(), ".data", "failover-snapshots");
 const PAGES = ["/", "/services", "/about", "/gallery", "/contact", "/blog", "/privacy", "/terms", "/accessibility"];
@@ -58,17 +77,25 @@ interface TenantRow {
 }
 
 async function liveTenants(): Promise<TenantRow[]> {
-  const db = new Client({ connectionString: process.env.DATABASE_URL_OWNER });
+  // Owner locally; the production export job carries only the control-role
+  // URL (never owner credentials — RUNBOOK.md Phase 7).
+  const db = new Client({
+    connectionString: process.env.DATABASE_URL_OWNER ?? process.env.DATABASE_URL_CONTROL,
+  });
   await db.connect();
   try {
-    const { rows } = await db.query(`
+    const apex = process.env.PLATFORM_APEX ?? "localhost";
+    const { rows } = await db.query(
+      `
       SELECT t.id, t.slug,
              COALESCE((SELECT hostname FROM domains d WHERE d.tenant_id = t.id AND d.is_primary LIMIT 1),
-                      t.slug || '.localhost') AS hostname,
+                      t.slug || '.' || $1) AS hostname,
              bp.nap->>'phone_display' AS phone_display,
              bp.nap->>'phone_tel' AS phone_tel
         FROM tenants t JOIN business_profile bp ON bp.tenant_id = t.id
-       WHERE t.status = 'live' ORDER BY t.slug`);
+       WHERE t.status = 'live' ORDER BY t.slug`,
+      [apex]
+    );
     return rows;
   } finally {
     await db.end();
@@ -99,8 +126,8 @@ function semanticChecks(html: string, tenant: TenantRow, path: string): string[]
   return problems;
 }
 
-async function fetchPostSlugs(host: string): Promise<string[]> {
-  const res = await get(BASE, "/sitemap.xml", host);
+async function fetchPostSlugs(base: string, host: string): Promise<string[]> {
+  const res = await get(base, "/sitemap.xml", host);
   if (res.status !== 200) return [];
   return [...res.body.matchAll(/\/blog\/([a-z0-9-]+)<\/loc>/g)].map((m) => m[1]);
 }
@@ -110,12 +137,21 @@ async function main() {
   let failures = 0;
 
   for (const tenant of tenants) {
-    const paths = [...PAGES, ...(await fetchPostSlugs(tenant.hostname)).map((s) => `/blog/${s}`)];
+    const base = DIRECT ? `https://${tenant.hostname}` : BASE;
+    const paths = [...PAGES, ...(await fetchPostSlugs(base, tenant.hostname)).map((s) => `/blog/${s}`)];
     console.log(`\n=== ${tenant.slug} (${tenant.hostname}) — ${paths.length} pages`);
     for (const path of paths) {
-      const res = await get(BASE, path, tenant.hostname);
+      const res = await get(base, path, tenant.hostname);
       if (res.status !== 200) {
         console.error(`  FAIL ${path}: HTTP ${res.status}`);
+        failures++;
+        continue;
+      }
+      // Never snapshot a snapshot: if the edge Worker served this page FROM
+      // the failover store (origin was down), writing it back would freeze
+      // the stale copy as "fresh". Refuse the whole page instead.
+      if (res.headers["x-curbside-failover"]) {
+        console.error(`  FAIL ${path}: served BY the failover path — origin is down, aborting this page`);
         failures++;
         continue;
       }

@@ -1,6 +1,8 @@
-# ASSUMPTIONS.md — Sessions 1 & 2
+# ASSUMPTIONS.md — Sessions 1, 2, 3 & 4
 
-Session 1 (tenant app) is #1–32; Session 2 (control plane) starts at #33.
+Session 1 (tenant app) is #1–32; Session 2 (control plane) is #33–52;
+Session 3 (growth plane) is #53–70; Session 4 (the runbook + production
+seams) starts at #71.
 
 # Session 1 (tenant app)
 
@@ -302,3 +304,187 @@ Every decision made without asking, per the build prompt. Where D3 said
 52. **Staff-decision FKs are ON DELETE SET NULL** (migration 004): removing
     a staff account never blocks on, or cascades into, decision history —
     the durable "who" is the email in audit_log.
+
+---
+
+# Session 3 (growth plane)
+
+## The monthly report (Part 5)
+
+53. **Report months are America/Los_Angeles calendar months.** All clients are
+    California businesses (D12 rationale); a UTC boundary would file every
+    evening conversion from the 31st under the wrong month. The math lives in
+    `src/lib/growth/period.ts` and is unit-tested against the DST switch and
+    the UTC/LA disagreement window.
+54. **Report data is FROZEN at generation and a SENT report is immutable.**
+    `reports.data` holds the assembled numbers; portal/PDF/email all render
+    from it, never re-query. Regenerating an unsent report replaces it;
+    regenerating a sent one is refused (a client must never re-open a report
+    and find different numbers). Corrections go in next month's notes.
+55. **Monthly reports auto-send.** The scheduler generates + emails on/after
+    the 2nd (staggered across 4 days). Staff shape the narrative via
+    `report_notes` (why/next) any time during the month; there is no hold
+    queue in v1 — at 200 tenants a manual send gate is a monthly chore that
+    would quietly stop happening. The admin Generate button exists for
+    previews (read before it sends), samples, and catch-ups.
+56. **The report's lead number counts leads-table rows for form submissions
+    (server truth — beacons get ad-blocked) plus call_tap/map_tap events.**
+    Demo rows feed ONLY kind='sample' reports, which carry a "demonstration
+    data" band and are never emailed (D5 + Invariant 12).
+57. **"Previous month exists" = tenant existed OR data exists in that window.**
+    Found by reading the seeded sample as the shop owner (Part 10.2): the
+    first cut gated the trend line on tenants.created_at alone and told a
+    tenant with three months of history it was their first month.
+58. **PDF renders via Playwright's bundled Chromium** (already a devDependency
+    for e2e). When it's absent (a lean production container), generation and
+    email still run and pdf_path stays NULL — logged, never faked. Session 4
+    decides the production PDF story (chromium in the jobs image, or a
+    render service).
+59. **The exit report (D20) generates at offboarding** into
+    `.data/exports/<slug>/` as HTML alongside the raw JSON export — same
+    assembler, same renderer, kind='exit', period = full engagement. Its
+    failure never blocks the export (the frozen data suffices to regenerate).
+
+## Scheduler (Parts 2, 9.3)
+
+60. **Staggering is a deterministic hash of tenant+job over epoch-anchored
+    windows** — same slot every cycle, no drift when a run lands late, no
+    thundering herd on a fresh fleet (first runs land in each tenant's future
+    slot, verified: 30 schedule rows created, 0 due on the first tick).
+    Reviews: 14-day window. Ranks/NAP: weekly. Solicitation: daily.
+    Content/report: month-anchored (1st/2nd) spread over 4 days.
+61. **Vendor quotas are platform-level UTC day-budgets** (`vendor_quotas`),
+    conservative by default (yelp 250/day vs the 300 free tier), overridable
+    via `QUOTA_<VENDOR>_PER_DAY`. A spent budget DEFERS the job 6h — no
+    error, no backoff, no last_error_at, other tenants untouched (proven in
+    tests/growth-quota.test.ts against the real DB).
+62. **Real failures back off exponentially per tenant+job** (30min · 2^n,
+    cap 24h) and stamp last_error_at on the integration row; the read path
+    serves cached rows throughout (D11). Operator errors (consent refusals,
+    half-configured LIVE integrations) alert immediately; transient failures
+    alert on the third consecutive miss.
+
+## Instrumentation
+
+63. **`events.is_demo` added (migration 005).** Real beacons/actions always
+    write false; seed data writes true; the portal tiles and every report
+    select real-else-demo, never both (D5).
+64. **Rank tracking (Part 8): no SERP vendor is named in D3, so none was
+    picked.** The integration row + schema + report section exist; live mode
+    THROWS naming this decision and `src/lib/growth/rank-tracking.ts` as the
+    seam (D11 half-configured rule). Demo snapshots are deterministic per
+    term+week and feed sample reports only. Terms cap at 20 per tenant —
+    enforced in code, seeded as service × city + service + "near me".
+65. **GBP adapter (Part 7) is read-only v1** (NAP + categories via the
+    Business Information API; config.location_id + an OAuth bearer secret,
+    manager access per D8). Demo mode reports "couldn't look" (nap_checks
+    ok=NULL) — a drift monitor that fakes a pass is worse than none. OAuth
+    refresh-token plumbing is a Session 4 runbook item.
+66. **NAP drift v1 surfaces:** our own JSON-LD and llms.txt (run through the
+    REAL builders against DB truth — also re-proving Invariant 6 weekly) plus
+    GBP when live. Yelp/directories join when their adapters gain read scopes.
+67. **Review solicitation is email-only** (SMS is A2P-blocked, ARCHITECTURE
+    §6), fires 3 days after a lead is marked WON, only for leads with an
+    email, once per lead ever (lead_id UNIQUE), Curb+ and up (D19). The ask
+    email includes direct Google/Yelp write-a-review links only when we
+    actually hold the place/business id — never guessed URLs.
+68. **Content calendar (Part 6): curb 0 / curb+ 2 / curb_pro 4 posts a month**
+    (+`features.extra_posts` for the à-la-carte add-on). Drafts land
+    UNPUBLISHED with a `review_content` queue item; the existing per-post
+    publish flow is the human gate. Internal links to a service section and
+    /contact are POST-PROCESSED in (`ensureInternalLinks`) when the generator
+    forgot them — the step everyone skips is code, not discipline. Voice
+    resolution reuses Session 2's consent-gated `getVoiceSource`; ConsentError
+    surfaces as a critical alert, never a workaround.
+69. **The June 2026 iron-ridge "monthly" (real data, 0 contacts) was generated
+    and console-sent during verification** and left in place deliberately —
+    it is an honest artifact of a tenant with no real traffic and proves the
+    thin-month degradation (Part 10.8) end to end.
+70. **e2e intake assertion updated 11 → 13 integration rows** (gbp +
+    rank_tracking added to the onboarding pipeline; migration 005 backfills
+    existing tenants).
+
+---
+
+# Session 4 (the runbook + production seams)
+
+Session 4's deliverables are `RUNBOOK.md`, `COSTS.md`, and `CALENDAR.md`.
+It also wired the code seams earlier sessions explicitly deferred to it
+(Key Vault provider, Azure Blob uploads, failover upload/serving, the
+Docker image) — a runbook step that says "now paste 60 lines of TypeScript"
+is not an executable instruction set.
+
+## Topology decisions
+
+71. **Region: `westus3`.** Closest modern region (availability zones,
+    current SKUs) to Southern California clients; `westus` is older and
+    capacity-constrained, `westus2` is farther for no saving. DB and
+    Container Apps co-located there per D15 — a tenant render is several
+    sequential queries and pays inter-region latency per query.
+72. **Database network model v1: public access + firewall** (operator IP +
+    the allow-azure-services rule), TLS required, NOBYPASSRLS roles with
+    strong passwords. VNet integration is deliberately deferred to the
+    Burstable→General-Purpose move (~50 tenants, COSTS.md) — a solo
+    operator gets a debuggable database now; the upgrade path is written
+    down where the money is.
+73. **The edge is one Cloudflare Worker on route `*/*`** (repo:
+    `infra/cloudflare/`). Verified against Cloudflare's docs: a `*/*` route
+    on the SaaS zone catches custom-hostname (client-domain) traffic too,
+    so one Worker fronts the entire fleet. It re-addresses requests to the
+    ACA FQDN carrying the visitor host in `X-Forwarded-Host`
+    (`TRUST_PROXY_HOST=1` makes proxy.ts trust it — never set that flag
+    without a proxy that overwrites the header), which means **ACA never
+    needs per-tenant custom-domain bindings** and the fallback origin stays
+    originless (`AAAA 100::`), exactly the documented Workers-as-origin
+    pattern. Rejected: Cloudflare Load Balancer + an nginx snapshot
+    container (two more paid/managed pieces to do the same two jobs).
+74. **Static failover serving (D6) is the same Worker:** origin
+    unreachable/5xx on GET → serve `failover/<hostname>/<page>.html` from
+    Blob and email staff via Resend directly from the edge (deduped 15 min
+    per host, `caches.default`). Failover responses carry
+    `X-Curbside-Failover: 1` and the exporter refuses to re-snapshot them
+    (no snapshot-of-a-snapshot). Honest limit: same-region Blob — this
+    covers app/DB/deploy failures, not a full regional outage.
+75. **Blob containers `tenant-images` and `failover` are public-read.**
+    Everything in them is public by nature (site imagery, snapshot copies
+    of public pages); lead-photo uploads are UUID-addressed. Revisit with
+    SAS if clients ever upload anything sensitive.
+
+## Code seams wired (and how)
+
+76. **Key Vault provider** (`src/lib/secrets.ts`): @azure/keyvault-secrets +
+    DefaultAzureCredential, lazy-imported so env mode never loads Azure
+    SDKs; 5-min value cache (60s negative) — rotation lands within 5
+    minutes, no deploy. 404 = unpopulated; other errors rethrow so live
+    adapters demo-fallback and stamp `last_error_at` (D11).
+77. **Sentry (D3) is NOT wired.** v1 alerting = the edge Worker's failover
+    email + Azure Monitor metric alerts (RUNBOOK 11.3) + the in-app alarm
+    dashboard. Logged as the honest gap; the D3 row stands as the intended
+    vendor.
+78. **The production image is one deliberately fat Dockerfile** (full
+    node_modules, scripts/, tsx, and Playwright chromium). Resolves #58:
+    report PDFs render in-process in production. Rejected `output:
+    standalone` — the cron jobs need scripts/, and dynamic imports
+    (playwright, @azure/*) defeat output tracing. Windows-vs-Linux native
+    binaries: the four win32 pins moved devDependencies →
+    **optionalDependencies** with their linux-x64 twins added, so `npm ci`
+    works on both platforms (direct win32 devDeps hard-fail EBADPLATFORM on
+    Linux).
+79. **Scheduling is two ACA cron Jobs:** a 15-min tick (curl image POSTs
+    `/api/jobs/run` at the ACA FQDN with CRON_TOKEN) and a nightly
+    export+upload run of the app image (`EXPORT_DIRECT=1` — the exporter
+    crawls `https://<hostname>` through the public edge, since ACA ingress
+    won't route foreign Host headers). Export also runs post-deploy via
+    `az containerapp job start` in the deploy ritual.
+80. **`npm run staff:create`** (new) bootstraps the production staff user;
+    `db:seed:fleet` is banned from production (it drags four fake tenants
+    along). The two Session-1 demo tenants DO get seeded in production
+    deliberately — they are the sales fleet (with `SKIP_IMAGE_SOURCING=1`;
+    images move to Blob via RUNBOOK 10.3's upload-batch + URL rewrite
+    rather than a new script).
+81. **`/api/health`** (new, unauthenticated, returns only a boolean):
+    DB-checked so ACA probes and edge failover react to a dead database,
+    excluded from the host proxy so it answers on the bare FQDN.
+82. **Runbook commands are PowerShell** — this project's operator is on
+    Windows; a bash runbook would be translated live at the worst moment.
+    Cost figures in COSTS.md are July-2026 list prices ±20%.

@@ -21,7 +21,7 @@ import { runDunning } from "@/lib/control/billing";
 // ---------------------------------------------------------------------------
 
 /** Don't re-fire an alert that's already open for this tenant+kind. */
-async function alertOnce(opts: {
+export async function alertOnce(opts: {
   tenantId: string | null;
   kind: string;
   severity: "info" | "warn" | "critical";
@@ -42,7 +42,7 @@ async function alertOnce(opts: {
  * A minimal bundle for adapter calls from job context: the email adapter only
  * reads tenant identity + integrations. Everything else is inert.
  */
-async function minimalBundle(tenant: {
+export async function minimalBundle(tenant: {
   id: string; slug: string; business_name: string; status: string; plan_tier: string;
   features: Record<string, boolean>; owner_email: string | null; preview_token: string;
 }): Promise<TenantBundle> {
@@ -246,6 +246,9 @@ export async function secretExpiryScan(): Promise<{ warned: number }> {
 // ---------------------------------------------------------------------------
 
 export async function runAllJobs(): Promise<Record<string, unknown>> {
+  // Deferred import: the growth module pulls in report/PDF machinery that
+  // scripts calling individual control jobs shouldn't pay for.
+  const { runGrowthJobs } = await import("@/lib/growth/jobs");
   const summary: Record<string, unknown> = { started_at: new Date().toISOString() };
   const jobs: [string, () => Promise<unknown>][] = [
     ["domains_check", checkPendingDomains],
@@ -255,6 +258,9 @@ export async function runAllJobs(): Promise<Record<string, unknown>> {
     ["synthetic_forms", syntheticFormChecks],
     ["deliverability", deliverabilityChecks],
     ["secret_expiry", secretExpiryScan],
+    // Growth plane (Session 3): staggered per-tenant work — reviews, ranks,
+    // NAP drift, solicitation, content calendar, the monthly report.
+    ["growth", () => runGrowthJobs()],
   ];
   for (const [name, job] of jobs) {
     try {
