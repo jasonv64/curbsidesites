@@ -9,3 +9,4 @@ playwright-report
 infra
 *.md
 !README.md
+.curbside-env*

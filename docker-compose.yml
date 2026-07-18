@@ -3,7 +3,7 @@
 # PostgreSQL Flexible Server (D3) — provisioned in Session 4's RUNBOOK.md.
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     container_name: curbside-postgres
     environment:
       POSTGRES_DB: curbside
@@ -12,7 +12,10 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - curbside-pgdata:/var/lib/postgresql/data
+      # postgres:18+ stores data in a major-version subdirectory, so the mount
+      # goes one level up (docker-library/postgres#1259). Mounting at
+      # /var/lib/postgresql/data makes the container refuse to start.
+      - curbside-pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U curbside_owner -d curbside"]
       interval: 5s

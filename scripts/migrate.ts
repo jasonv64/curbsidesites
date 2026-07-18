@@ -27,15 +27,33 @@ async function main() {
     // curbside_app: the tenant app. curbside_control: the control plane
     // (Session 2) — cross-tenant reach comes from explicit RLS policies in
     // 002, never from bypassing RLS.
+    // Azure Database for PostgreSQL's admin is NOT a real superuser, and only a
+    // superuser may *change* the SUPERUSER/BYPASSRLS attributes — even to "NO".
+    // So the attributes are declared once at CREATE (where they are the
+    // defaults anyway, so no privileged change is required), and ALTER only
+    // rotates the password. The invariant is then asserted rather than assumed:
+    // a silently-ignored ALTER used to be undetectable, which is exactly the
+    // failure mode D4 cannot afford.
     const ensureRole = async (name: string, password: string) => {
-      const stmt = (verb: string) =>
-        `${verb} ROLE ${name} LOGIN NOBYPASSRLS NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD '${password.replace(/'/g, "''")}'`;
+      const quoted = password.replace(/'/g, "''");
       const { rows } = await db.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [name]);
       if (rows.length === 0) {
-        await db.query(stmt("CREATE"));
+        await db.query(
+          `CREATE ROLE ${name} LOGIN NOBYPASSRLS NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD '${quoted}'`
+        );
         console.log(`created role ${name}`);
       } else {
-        await db.query(stmt("ALTER"));
+        await db.query(`ALTER ROLE ${name} LOGIN PASSWORD '${quoted}'`);
+      }
+
+      const { rows: attrs } = await db.query(
+        "SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = $1",
+        [name]
+      );
+      if (attrs[0]?.rolsuper || attrs[0]?.rolbypassrls) {
+        throw new Error(
+          `${name} has rolsuper=${attrs[0].rolsuper} rolbypassrls=${attrs[0].rolbypassrls} — RLS isolation (D4) would not hold. Refusing to continue.`
+        );
       }
     };
     await ensureRole("curbside_app", process.env.APP_DB_PASSWORD ?? "curbside_app_dev");
