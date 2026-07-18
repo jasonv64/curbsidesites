@@ -16,7 +16,7 @@ provisioned any of these services. Competence assumed; familiarity not.
 - ⚠️ marks a step that can destroy something irreversible or half-succeed
   silently. The warning comes *before* the step.
 - Real-world waits (Twilio review, Stripe verification, DNS, GBP) live in
-  `CALENDAR.md`. **Read it first and start its day-one items today** — none
+  `CALENDAR.md`. **Read it first and start its day-one items today** — none 
   of them block Phase 1, and all of them block going live for real clients.
 - What everything costs, at 3 / 50 / 200 tenants: `COSTS.md`.
 
