@@ -186,6 +186,10 @@ async function draftWithClaude(
     body: JSON.stringify({
       model: "claude-opus-4-8",
       max_tokens: 8000,
+      // Adaptive thinking is OFF unless asked for explicitly on this model.
+      // Same reasoning as content-seeding: every post passes a human gate, and
+      // thinking keeps the model's working out of the drafted copy.
+      thinking: { type: "adaptive" },
       tools: [
         {
           name: "deliver_posts",

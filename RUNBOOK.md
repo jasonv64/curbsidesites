@@ -39,6 +39,27 @@ Phase order = dependency order: **1** Azure foundation → **2** database →
 **7** static failover → **8** email → **9** Stripe → **10** the three demo
 tenants → **11** monitoring + rollback.
 
+**As built (2026-07-18) — where the live deployment differs from this page.**
+The commands below are still the recipe; these are the values and choices that
+actually shipped. Read this before copying any `$Variable` verbatim.
+
+| This page says | Actually deployed | Why |
+|---|---|---|
+| PowerShell on Windows | **zsh on macOS** | Translate `Invoke-RestMethod`→`curl`, `` ` ``→`\`, `Select-String`→`grep`, `Out-File`→heredoc |
+| `curbside-prod`, `curbside-app`, … | **`-01` suffix on every name** (`curbside-prod-01`, `curbside-app-01`, `curbsideconreg01`) | Chosen at provisioning |
+| Postgres **16** | **Postgres 18** | Local `docker-compose.yml` moved to 18 to match. ⚠️ The 18 image stores data in a major-version subdirectory — the volume mounts at `/var/lib/postgresql`, **not** `/var/lib/postgresql/data`, or the container won't start |
+| admin user `curbside_admin` | **`curbsidepgadmin01`** | The connection strings must match |
+| Storage `Standard_LRS` | **`Standard_RAGRS`** | Portal default, kept; ~$10–15/mo above COSTS.md. Reversible with `az storage account update --sku Standard_LRS` |
+| `--max-replicas 3` | **`--max-replicas 1`** | Per-instance ISR cache — see the note in 5.2 |
+| Phase 9 (Stripe) | **deferred** | Not needed to put demos on the internet |
+| A freshly-bought domain with no mail | **GoDaddy NS + live Microsoft 365 mail** | ⚠️ The Phase 6 nameserver swap will take mail down unless you do **6.1a** first |
+
+Session variables live in `~/.curbside-env-01` (`chmod 600`, outside the repo
+so `az acr build` can't upload it), sourced per terminal. It exports both the
+descriptive names and the short `$RG`/`$PG`/`$ST` aliases this page uses, plus
+`$ACR_LOGIN_SERVER` and `$APP_FQDN`. **Never source it in a shell where you run
+`npm run dev`** — `DATABASE_URL` would point local dev at production.
+
 ---
 
 ## PHASE 0 — Names, tools, and the terminal
@@ -142,15 +163,26 @@ Takes ~5–10 minutes.
 ```powershell
 $MYIP = (Invoke-RestMethod https://api.ipify.org)
 az postgres flexible-server create --resource-group $RG --name $PG --location $LOC `
-  --tier Burstable --sku-name Standard_B1ms --storage-size 32 --version 16 `
+  --tier Burstable --sku-name Standard_B1ms --storage-size 32 --version 18 `
   --admin-user curbside_admin --admin-password $PGPW `
   --public-access $MYIP --yes
-az postgres flexible-server db create --resource-group $RG --server-name $PG --database-name curbside
+az postgres flexible-server db create --resource-group $RG --server-name $PG --name curbside
+```
+
+⚠️ Azure blocks Postgres extensions by default, and `001_init.sql` needs
+`pgcrypto`. Allowlist it now or 2.3 fails partway with error `0A000` — after
+`ensureRole` has already created the two roles, which is what makes the retry
+fail differently the second time:
+
+```powershell
+az postgres flexible-server parameter set --resource-group $RG --server-name $PG `
+  --name azure.extensions --value pgcrypto
 ```
 
 Why these choices: **B1ms** (1 vCPU / 2 GiB) is genuinely enough for 3
 tenants and costs ~$13/mo — `COSTS.md` says when to move to B2s. **Postgres
-16** matches the local container exactly. **Public access + firewall** (not
+18** matches the local container exactly (`docker-compose.yml`) — keep the two
+in lockstep whichever version you pick. **Public access + firewall** (not
 VNet injection) is the deliberate v1 network model: a solo operator gets a
 debuggable database and loses nothing that matters yet; the VNet upgrade
 path is noted in COSTS.md at the 50-tenant mark.
@@ -195,9 +227,18 @@ npm run db:migrate
 ```
 
 Half-success to watch for: if this hangs then times out, it's the firewall
-(your IP changed — rerun 2.1's firewall line with the new `$MYIP`). If it
-fails with a certificate error, your corporate network is intercepting TLS;
-hotspot around it.
+(your IP changed — rerun 2.1's firewall line with the new `$MYIP`; note the
+`list` subcommand wants `--server-name`, not `-n`). If it fails with a
+certificate error, your corporate network is intercepting TLS; hotspot
+around it.
+
+On Azure specifically, the migration runner **only declares** `NOSUPERUSER` /
+`NOBYPASSRLS` when it *creates* a role — Azure's admin is not a true
+superuser, and only a superuser may change those attributes, even to "NO".
+Re-runs therefore rotate the password and then *assert* the attributes rather
+than re-setting them; a role that somehow has `rolsuper` or `rolbypassrls`
+aborts the migration instead of silently proceeding. Nothing to do here —
+just don't "fix" that back into a single `CREATE`/`ALTER` statement.
 
 ### 2.4 [RUN] Seed the two polished demo tenants + your staff login
 
@@ -364,17 +405,66 @@ az acr build --registry $ACR --image curbside-app:v1 .
 First build takes ~10 minutes (chromium). Tag every build (`v1`, `v2`, …) —
 tags are your rollback vocabulary (Phase 11).
 
+⚠️ **The login server is not always `$ACR.azurecr.io`.** Depending on the
+registry's domain-name-label scope, Azure appends a hash
+(`myacr-ab12cd34.azurecr.io`). Read the real value and use it everywhere
+below — a wrong registry host is an image-pull failure at 5.2 and again in
+7.3's export job:
+
+```powershell
+$ACRLOGIN = az acr show --name $ACR --query loginServer -o tsv
+$ACRLOGIN   # ← use this, not "$ACR.azurecr.io"
+```
+
 ### 5.2 [RUN] Environment + the app (it will crash-loop for a few minutes — expected)
+
+A fresh pay-as-you-go subscription is registered for neither provider Container
+Apps needs. Do this first — `env create` fails on the second one even after you
+fix the first, and registration is a subscription-wide, one-time operation that
+takes a few minutes to propagate:
+
+```powershell
+az provider register -n Microsoft.App --wait
+az provider register -n Microsoft.OperationalInsights --wait     # ACA's default logging
+az provider show -n Microsoft.App --query registrationState -o tsv              # → Registered
+az provider show -n Microsoft.OperationalInsights --query registrationState -o tsv
+```
 
 ```powershell
 az containerapp env create --resource-group $RG --name $ACAENV --location $LOC
 
 az containerapp create --resource-group $RG --name $APP --environment $ACAENV `
-  --image "$ACR.azurecr.io/curbside-app:v1" `
-  --registry-server "$ACR.azurecr.io" --registry-identity system `
+  --image "$ACRLOGIN/curbside-app:v1" `
+  --registry-server "$ACRLOGIN" --registry-identity system `
   --ingress external --target-port 3000 `
-  --min-replicas 1 --max-replicas 3 --cpu 1.0 --memory 2.0Gi `
+  --min-replicas 1 --max-replicas 1 --cpu 1.0 --memory 2.0Gi `
   --system-assigned
+```
+
+`--max-replicas 1`: the app calls `revalidateTag()` when a tenant edits its
+content, but Next's default ISR cache is **per-instance** and `next.config.ts`
+sets no shared `cacheHandler`. At 2+ replicas one shop's edit invalidates only
+the replica that served the request, and the client sees their old hours flap
+back for up to 600s. Latent at demo traffic, and it bites exactly when a site
+gets busy. Scaling out is a real decision that needs a shared cache handler
+(Redis or Blob) — make it deliberately, don't inherit it from a default.
+
+⚠️ **`az containerapp create` may silently ignore `--image`,
+`--registry-server`, and `--registry-identity`** and deploy
+`mcr.microsoft.com/k8se/quickstart:latest` instead — exit code 0, no warning.
+The managed identity doesn't exist yet at create time, so it can't authenticate
+to ACR, and it substitutes the placeholder rather than failing. The tell is a
+startup probe that never passes (quickstart listens on `:80`, your ingress
+targets `3000`), which is easy to mistake for the expected crash-loop below.
+**Verify, then fix after 5.3 grants the roles:**
+
+```powershell
+az containerapp show -g $RG -n $APP --query "properties.template.containers[0].image" -o tsv
+az containerapp show -g $RG -n $APP --query "properties.configuration.registries" -o json   # empty = it dropped them
+
+# If either is wrong, re-apply once the identity has AcrPull (5.3):
+az containerapp registry set -g $RG -n $APP --server "$ACRLOGIN" --identity system
+az containerapp update -g $RG -n $APP --image "$ACRLOGIN/curbside-app:v1"
 ```
 
 The app has no environment yet, so its first revision fails its own DB
@@ -385,9 +475,16 @@ identity** (the thing Key Vault trusts) only exists once the app does.
 
 ```powershell
 $PRINCIPAL = az containerapp show --resource-group $RG --name $APP --query identity.principalId -o tsv
+$ACRID = az acr show --name $ACR --query id -o tsv
 az role assignment create --assignee $PRINCIPAL --role "Key Vault Secrets User" --scope $KVID
 az role assignment create --assignee $PRINCIPAL --role "Storage Blob Data Contributor" --scope $STID
+az role assignment create --assignee $PRINCIPAL --role "AcrPull" --scope $ACRID
 ```
+
+`AcrPull` is what makes `--registry-identity system` work. The CLI *sometimes*
+creates it for you; when it doesn't, the failure looks nothing like the
+expected crash-loop — you get an image-pull `UNAUTHORIZED` and no container at
+all. The assignment is idempotent, so run it regardless.
 
 `Key Vault Secrets User` is read-only — the app can resolve secrets, never
 write or list-then-exfiltrate them via a compromised dependency with write
@@ -479,10 +576,27 @@ $FQDN   # ← write this down; the Worker (Phase 6) needs it
 # 1. Health (also proves DB connectivity through the firewall rule):
 Invoke-RestMethod "https://$FQDN/api/health"          # → ok: True
 
-# 2. The app CAN read Key Vault (status shows populated:true for the
-#    anthropic ref on any seeded tenant):
+# 2. The app CAN read Key Vault.
+#    ⚠️ /api/status enumerates ONLY per-tenant refs (tenant-<slug>-<key>).
+#    `curbside-anthropic-api-key` is a PLATFORM ref and never appears here —
+#    don't look for it. And every ref reading `populated:false` is ambiguous
+#    by construction: secretPopulated() swallows all errors and returns false,
+#    so "not seeded" and "provider broken" look identical.
 $status = Invoke-RestMethod "https://$FQDN/api/status" -Headers @{ Authorization = "Bearer $STATUS_TOKEN" }
 $status | ConvertTo-Json -Depth 6 | Select-String "populated"
+
+#    Disambiguate from the logs instead — the code makes this decidable:
+#      SECRET_PROVIDER unset  → env fallback, logs "env provider in production mode"
+#      SECRET_PROVIDER typo'd → throws "Unknown SECRET_PROVIDER" (loud, not silent)
+#      identity can't read KV → logs "Key Vault read failed" on EVERY ref
+#      secret simply absent   → clean 404, logs nothing
+#    So: hit /api/status (which resolves every ref), then confirm silence.
+az containerapp logs show -g $RG -n $APP --tail 200 --type console |
+  Select-String "env provider|Key Vault read failed|Unknown SECRET_PROVIDER"
+# No matches + SECRET_PROVIDER=keyvault below = the managed identity really can
+# read the vault, and the false flags are genuine "not seeded yet".
+az containerapp show -g $RG -n $APP `
+  --query "properties.template.containers[0].env[?name=='SECRET_PROVIDER'].value" -o tsv   # → keyvault
 
 # 3. NO endpoint returns a secret VALUE — grep the actual response bytes
 #    for the actual secret (CONTROL-PLANE Part 12.3 — responses, not code):
@@ -515,6 +629,52 @@ secret *value* appears in no response.
    ~24 h (CALENDAR.md).
 3. Note your **Zone ID** (dash → the domain → Overview, right column) and
    **Account ID** (same panel).
+
+#### ⚠️ 6.1a — If the domain already carries live mail, do this FIRST
+
+**As built:** `curbsidesites.com` is registered at GoDaddy (nameservers
+`ns23/ns24.domaincontrol.com`) and already runs Microsoft 365 mail. The
+nameserver swap in step 2 **replaces GoDaddy's entire zone with Cloudflare's**.
+Anything not already recreated at Cloudflare stops resolving the moment the
+swap propagates — and the first casualty is your own business email, silently,
+with senders getting bounces you never see.
+
+Cloudflare's "Add site" scan copies most records automatically, but it is
+best-effort: it misses records it can't enumerate, and it does not know which
+must stay unproxied. **Verify by hand before flipping.**
+
+1. [YOU] At GoDaddy: export the zone file (DNS → Records → Export), or
+   screenshot every record. Keep it until the migration is proven.
+2. [RUN] Capture what's live right now, from outside:
+
+```powershell
+$D = "curbsidesites.com"
+dig +short MX $D ; dig +short TXT $D ; dig +short CNAME autodiscover.$D
+dig +short TXT _dmarc.$D ; dig +short CNAME selector1._domainkey.$D
+```
+
+3. [YOU] In Cloudflare, recreate every mail record **before** touching
+   nameservers. All of these are **DNS-only (grey cloud)** — proxying an MX or
+   an auth record breaks mail:
+
+| Type | Name | Content | Cloud |
+|---|---|---|---|
+| MX | `@` | `curbsidesites-com.mail.protection.outlook.com` (pri 0) | grey |
+| TXT | `@` | `v=spf1 include:spf.protection.outlook.com -all` | grey |
+| TXT | `@` | `MS=…` (Microsoft's domain-verification token) | grey |
+| CNAME | `autodiscover` | `autodiscover.outlook.com` | grey |
+| CNAME | `selector1._domainkey` / `selector2._domainkey` | per M365 (see below) | grey |
+| TXT | `_dmarc` | see 8.1 — replace the registrar's default | grey |
+
+4. [YOU] Flip the nameservers, then **re-run the `dig` block above** and confirm
+   every answer is unchanged. Send yourself a test message both directions
+   before moving on.
+
+**Also enable DKIM in Microsoft 365** if you haven't — it is off by default
+(Defender portal → Email & collaboration → Policies → Email authentication →
+DKIM → enable for the domain, which publishes the two `selector*._domainkey`
+CNAMEs). Without it, mail authenticates on SPF alignment alone and fails the
+moment a message is forwarded.
 
 ### 6.2 [RUN] DNS records
 
@@ -652,6 +812,28 @@ client-owned domain without touching the Cloudflare dashboard.
 
 ### 7.1 [RUN] Export and upload the first snapshot set
 
+> **AS BUILT (2026-07-18): skip the laptop — run 7.3 first, then
+> `az containerapp job start ... -n curbside-export`.** Two things break the
+> laptop path. (1) A macOS resolver that has negative-cached
+> `*.sites.curbsidesites.com` fails every crawl with `ENOTFOUND` for hostnames
+> that resolve fine at `1.1.1.1`; fixing it needs `sudo dscacheutil -flushcache`.
+> (2) The export job inside Azure is the thing you actually need working, so
+> proving it here costs nothing extra. The commands below still work once DNS
+> resolves locally.
+>
+> **First, check the `domains` table.** The export crawls each tenant's
+> **primary domain**, falling back to `<slug>.$PLATFORM_APEX` only when there
+> isn't one. `db:seed` inserts fictional `.test` primary domains
+> (`ironridgeoffroad.test`), which do two bad things: the crawl dies on
+> `ENOTFOUND`, and — worse — had it succeeded, snapshots would be **keyed by a
+> hostname no visitor ever sends**, so failover would silently never match.
+> Snapshot keys must equal the hostname in the visitor's request.
+>
+> ```bash
+> psql "$DATABASE_URL_OWNER" -c "SELECT t.slug, d.hostname, d.is_primary FROM domains d JOIN tenants t ON t.id=d.tenant_id;"
+> psql "$DATABASE_URL_OWNER" -c "DELETE FROM domains WHERE hostname LIKE '%.test';"   # if seeded
+> ```
+
 From the laptop (the export crawls **through the public edge** in
 `EXPORT_DIRECT` mode and refuses any page already served by the failover
 path — it cannot snapshot a snapshot):
@@ -674,6 +856,32 @@ snapshot. Don't proceed on a red export.
 This takes every tenant site down on purpose for ~5 minutes. It's 3 demo
 tenants and a weekend — this is the cheapest this drill will ever be, and
 D6 is unproven theater until you've done it.
+
+> **AS BUILT: the first run of this drill FAILED, and it found a real bug.**
+> Deactivating the revision made every tenant serve a bare **404** with no
+> `x-curbside-failover` header — no snapshot at all. Cause: Azure Container
+> Apps answers **404, not 503**, when no revision is active, and `worker.js`
+> only failed over on `>= 500` or an unreachable origin, so it classified a
+> dead origin as healthy and forwarded the 404. The single most likely
+> production outage mode was the one case D6 did not cover.
+>
+> Fixed in `infra/cloudflare/worker.js`: a 404 is now **suspect** rather than
+> healthy. Because 404 is also the right answer for an unknown tenant, status
+> alone can't distinguish them — **the snapshot's existence is the
+> disambiguator.** Only LIVE tenants are exported, so a 404 for a hostname and
+> path we hold a snapshot of means the origin is broken, while a genuinely
+> unknown host has no snapshot and falls through to a clean 404. Verified: a
+> nonexistent slug and a nonexistent page on a live tenant both still 404.
+>
+> **Known edge case:** a tenant flipped `live → draft` 404s at the origin while
+> its snapshot still exists, so the edge would serve the stale snapshot until
+> the next nightly export prunes it. Suspended tenants are unaffected (they
+> serve a 200 under-construction page). Prune snapshots for non-live tenants if
+> this ever matters.
+>
+> **Run it from a script with the reactivate in a `trap`,** so a failed
+> assertion or a timeout still brings production back rather than leaving every
+> tenant dark. Do not run the kill and the restore as two hand-typed commands.
 
 ```powershell
 # Kill: deactivate the serving revision.
@@ -701,7 +909,68 @@ curl.exe -s -o NUL -w "%{http_code}" https://iron-ridge-offroad.sites.curbsidesi
 ### 7.3 [RUN] Schedule it: the jobs tick and the nightly export
 
 Two Container Apps **Jobs** — the 15-minute platform tick (domain polling,
-dunning, alarms, growth scheduler) and the nightly snapshot refresh:
+dunning, alarms, growth scheduler) and the nightly snapshot refresh.
+
+> **AS BUILT — four corrections. The PowerShell below is kept for reference but
+> does not work as written.**
+>
+> **1. Use ONE user-assigned identity for both jobs, created and granted
+> BEFORE either job exists.** A system-assigned identity doesn't exist until
+> the job is created, but the job can't be created without `AcrPull` — a
+> chicken-and-egg that leaves you with a job silently running
+> `mcr.microsoft.com/k8se/quickstart:latest` (the same trap as Phase 5.4). A
+> user-assigned identity breaks the cycle and is reusable:
+>
+> ```bash
+> az identity create -g "$RESOURCE_GROUP" -n curbside-jobs-id
+> UAMI=$(az identity show -g "$RESOURCE_GROUP" -n curbside-jobs-id --query id -o tsv)
+> P=$(az identity show -g "$RESOURCE_GROUP" -n curbside-jobs-id --query principalId -o tsv)
+> CID=$(az identity show -g "$RESOURCE_GROUP" -n curbside-jobs-id --query clientId -o tsv)
+> az role assignment create --assignee-object-id "$P" --assignee-principal-type ServicePrincipal \
+>   --role AcrPull --scope "$(az acr show -n "$CONTAINER_REGISTRY" -g "$RESOURCE_GROUP" --query id -o tsv)"
+> az role assignment create --assignee-object-id "$P" --assignee-principal-type ServicePrincipal \
+>   --role "Key Vault Secrets User" --scope "$(az keyvault show -n "$KEYVAULT" --query id -o tsv)"
+> az role assignment create --assignee-object-id "$P" --assignee-principal-type ServicePrincipal \
+>   --role "Storage Blob Data Contributor" --scope "$(az storage account show -n "$STORAGE_ACCOUNT" -g "$RESOURCE_GROUP" --query id -o tsv)"
+> ```
+>
+> Then create each job with `--mi-user-assigned "$UAMI" --registry-identity "$UAMI"`
+> and `identityref:$UAMI` in the Key Vault secret refs. (`--system-assigned` is
+> `--mi-system-assigned` on the current CLI; az's own auto AcrPull grant fails
+> because it passes the *login server* where a *registry name* is expected —
+> harmless once you've granted it above.)
+>
+> **2. `AZURE_CLIENT_ID` is REQUIRED on every job using the user-assigned
+> identity.** `DefaultAzureCredential` cannot pick a user-assigned identity on
+> its own; without it the export runs, passes every semantic check, and then
+> dies at the upload with `CredentialUnavailableError`. Set
+> `AZURE_CLIENT_ID=$CID`.
+>
+> **3. `--command`/`--args` cannot express `sh -c "a && b"`.** Passing three
+> values to `--command` errors with `unrecognized arguments`; comma-joining
+> them yields the single literal arg `-c,npm run …` and the container dies with
+> `/bin/sh: 0: Illegal option -,`. **Set the args via YAML instead:**
+> `az containerapp job show ... -o yaml > job.yaml`, edit, then
+> `az containerapp job update --yaml job.yaml`:
+>
+> ```yaml
+>     - args:
+>       - -c
+>       - npm run export:static && npm run snapshots:upload
+>       command:
+>       - /bin/sh
+> ```
+>
+> **4. Quote any arg containing a colon-space in YAML.** `-H "Authorization:
+> Bearer $TOKEN"` parses as a nested mapping and silently becomes a mangled
+> dict. Use a folded scalar:
+>
+> ```yaml
+>       - >-
+>         curl -fsS -X POST -H "Authorization: Bearer $CRON_TOKEN"
+>         https://$FQDN/api/jobs/run
+> ```
+
 
 ```powershell
 # The tick: curl the app's own jobs endpoint. Runs INSIDE Azure, addressed
@@ -724,7 +993,7 @@ az role assignment create --assignee $TICK_PRINCIPAL --role "Key Vault Secrets U
 # with a different command:
 az containerapp job create --resource-group $RG --name curbside-export --environment $ACAENV `
   --trigger-type Schedule --cron-expression "0 9 * * *" `
-  --image "$ACR.azurecr.io/curbside-app:v1" --registry-server "$ACR.azurecr.io" --registry-identity system `
+  --image "$ACRLOGIN/curbside-app:v1" --registry-server "$ACRLOGIN" --registry-identity system `
   --cpu 0.5 --memory 1.0Gi --replica-timeout 1800 --replica-retry-limit 1 --system-assigned `
   --secrets "db-control=keyvaultref:https://$KV.vault.azure.net/secrets/curbside-control-database-url,identityref:system" `
   --env-vars "DATABASE_URL_CONTROL=secretref:db-control" "EXPORT_DIRECT=1" `
@@ -762,10 +1031,40 @@ scheduled jobs listed with a successful execution each.
    DKIM (3 CNAMEs or TXT records) + SPF include records.
 3. Add each record in Cloudflare DNS (dash → DNS). **DNS-only (grey cloud)**
    for these — email auth records must not be proxied.
+
+   ⚠️ **SPF: merge, never add a second record.** A domain may have exactly one
+   SPF TXT record. Two is a `permerror` and **both** fail — which shows up as
+   `SPF: FAIL` on the 8.3 test with no obvious cause. `curbsidesites.com`
+   already carries Microsoft 365's SPF, so the single record becomes:
+
+   ```
+   v=spf1 include:spf.protection.outlook.com include:<resend's include> -all
+   ```
+
+   Take Resend's include string from its dashboard verbatim; don't guess it.
+   Keep the terminating `-all` and keep it last. Verify afterwards that exactly
+   one `v=spf1` line comes back:
+
+   ```powershell
+   dig +short TXT curbsidesites.com | Select-String "v=spf1"
+   ```
+
+   DKIM is per-selector, so Resend's DKIM records coexist with Microsoft's
+   `selector1`/`selector2` without conflict — DKIM needs no merging.
+
 4. Add a DMARC record yourself (Resend won't force it, inboxes increasingly
    do): TXT `_dmarc.curbsidesites.com` =
    `v=DMARC1; p=none; rua=mailto:valadezj045@gmail.com` — `p=none` while
    warming (CALENDAR.md), tighten to `quarantine` after 2–4 clean weeks.
+
+   ⚠️ **Registrars publish their own DMARC default — replace it, don't add to
+   it.** As built, GoDaddy had already published
+   `p=quarantine; rua=mailto:dmarc_rua@onsecureserver.net`. That is worse than
+   nothing here on both counts: `p=quarantine` quarantines misaligned mail
+   while you're still warming (the runbook wants `p=none` until it's clean),
+   and the aggregate reports go to the registrar instead of to you, so you get
+   no visibility into what's failing. Like SPF, only one `_dmarc` record is
+   valid — overwrite it.
 5. Wait for Resend to show **Verified** (minutes usually).
 6. API Keys → create `curbside-platform` full-access key.
 
@@ -1020,7 +1319,7 @@ and every published word.
 
 ```powershell
 az acr build --registry $ACR --image curbside-app:v2 .          # next tag each time
-az containerapp update --resource-group $RG --name $APP --image "$ACR.azurecr.io/curbside-app:v2"
+az containerapp update --resource-group $RG --name $APP --image "$ACRLOGIN/curbside-app:v2"
 Invoke-RestMethod "https://$FQDN/api/health"                     # ok: true
 curl.exe -s https://iron-ridge-offroad.sites.curbsidesites.com/ | Select-String "760"   # semantic, per Invariant 9
 az containerapp job start --resource-group $RG --name curbside-export                    # post-deploy snapshot (D6)
@@ -1137,3 +1436,15 @@ per-tenant integration keys per SECRETS.md as clients go live.
 | `db:migrate` hangs then times out | firewall — your IP changed (2.3) |
 | Snapshot drill serves 502 not the snapshot | blob container not public / wrong `SNAPSHOT_HOST` in wrangler.toml (7.2) — the Worker found no snapshot and passed the outage through |
 | Jobs never run | `CRON_TOKEN` mismatch between KV and the tick job → every tick 401s silently; check `az containerapp job execution list` (7.3) |
+| App stuck `Activating`, startup probe never passes | `containerapp create` silently deployed `k8se/quickstart` instead of your image — it listens on `:80`, ingress targets `3000`. Check the running image, not the logs (5.2) |
+| Image pull `UNAUTHORIZED`, no container at all | Missing `AcrPull` on the app's managed identity (5.3) — not the expected crash-loop |
+| `env create` fails on a fresh subscription | `Microsoft.App` and/or `Microsoft.OperationalInsights` unregistered; fixing only the first still fails on the second (5.2) |
+| `db:migrate` fails `0A000` … `check_extension_permissions` | `pgcrypto` not allowlisted via `azure.extensions` (2.1) |
+| `db:migrate` fails *only on re-run*, "must have SUPERUSER to change SUPERUSER" | First run already created the roles; Azure's admin can't re-declare the attributes. The runner asserts instead — you're on an old copy of `scripts/migrate.ts` (2.3) |
+| `db:seed` / `staff:create` exit 0 but production is empty | Ran in a shell without the Azure env sourced — dotenv fell back to `.env.local` and seeded local Docker. Nothing reads `.env.production.local` (2.3) |
+| Client edits their hours, sees them flap back for ~10 min | More than one replica: ISR cache is per-instance and `revalidateTag` only reaches the replica that served the edit (5.2) |
+| Everything on `/api/status` shows `populated:false` | Expected when no integration secrets are seeded yet — but indistinguishable from `SECRET_PROVIDER` unset. Seed one real key and re-check (5.6) |
+| Business email dies hours after the Cloudflare cutover | Nameserver swap replaced the whole zone; MX/SPF/autodiscover/DKIM were never recreated at Cloudflare (6.1a). Senders bounce; you see nothing |
+| `SPF: FAIL` on the 8.3 Gmail test, records look right | Two `v=spf1` TXT records = `permerror`, **both** fail. Merge Microsoft's and Resend's includes into one line (8.1) |
+| Resend mail quarantined during warmup | Registrar's default DMARC at `p=quarantine` was never replaced; its `rua` also points at the registrar, so you get no reports (8.1) |
+| Mail authenticates until someone forwards it, then fails | M365 DKIM never enabled — `selector1/2._domainkey` empty, so only SPF alignment is carrying it (6.1a) |

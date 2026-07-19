@@ -1,8 +1,11 @@
 /**
- * Curbside edge router — a Cloudflare Worker on route `*/*` of the
- * curbsidesites.com zone (RUNBOOK.md Phase 6).
+ * Curbside edge router — a Cloudflare Worker on the zone-wide catch-all route
+ * of the curbsidesites.com zone (RUNBOOK.md Phase 6). The literal route
+ * pattern lives in wrangler.toml and is deliberately NOT written out here:
+ * it contains the two characters that close a block comment, so spelling it
+ * in this header is a build error (`Unexpected "*"`), not a style nit.
  *
- * A `*/*` route catches ALL traffic entering the zone, including
+ * That catch-all route takes ALL traffic entering the zone, including
  * Cloudflare-for-SaaS custom hostnames (client-owned domains), so this one
  * Worker fronts every tenant site, the platform subdomains, and the admin.
  *
@@ -37,6 +40,21 @@ export default {
     const url = new URL(request.url);
     const visitorHost = url.hostname;
 
+    // Non-site hosts (www, and anything else added to REDIRECT_HOSTS) fold
+    // into the canonical marketing host before any origin work. 301, because
+    // this mapping is permanent and one canonical host is what search engines
+    // should index; the path carries over so deep links survive.
+    const redirectHosts = (env.REDIRECT_HOSTS ?? "")
+      .split(",")
+      .map((h) => h.trim().toLowerCase())
+      .filter(Boolean);
+    if (env.CANONICAL_HOST && redirectHosts.includes(visitorHost.toLowerCase())) {
+      return Response.redirect(
+        `https://${env.CANONICAL_HOST}${url.pathname}${url.search}`,
+        301
+      );
+    }
+
     const originUrl = `https://${env.ORIGIN_HOST}${url.pathname}${url.search}`;
     const headers = new Headers(request.headers);
     headers.set("X-Forwarded-Host", visitorHost);
@@ -55,9 +73,20 @@ export default {
       originResponse = null; // unreachable or timed out
     }
 
-    const healthy = originResponse && originResponse.status < 500;
+    // A 404 counts as suspect, not healthy. Azure Container Apps answers 404 —
+    // NOT 503 — when no revision is active, which is what "the app is down"
+    // actually looks like here; the Phase 7.2 drill deactivated the revision
+    // and this Worker forwarded the 404 as if the origin were fine. But 404 is
+    // also the correct answer for an unknown tenant, so the two cannot be told
+    // apart by status alone. The snapshot IS the disambiguator: only LIVE
+    // tenants are ever exported (scripts/export-static.ts), so a 404 for a
+    // hostname+path we hold a snapshot of means the origin is broken, while a
+    // genuinely unknown host has nothing to serve and falls through to the
+    // clean 404 below.
+    const suspect =
+      !originResponse || originResponse.status >= 500 || originResponse.status === 404;
     const canFailover = request.method === "GET" || request.method === "HEAD";
-    if (healthy || !canFailover) {
+    if (!suspect || !canFailover) {
       return (
         originResponse ??
         new Response("Origin unavailable", { status: 502, headers: { "content-type": "text/plain" } })

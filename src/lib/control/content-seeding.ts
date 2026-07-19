@@ -116,6 +116,11 @@ async function generateWithClaude(ctx: TenantContext, voice: VoiceSource, apiKey
     body: JSON.stringify({
       model: "claude-opus-4-8",
       max_tokens: 8000,
+      // Adaptive thinking is OFF unless asked for explicitly on this model.
+      // These drafts are read by a human before publishing (GROWTH Part 6), so
+      // the reasoning is worth paying for — and without it the model tends to
+      // leak its working into the visible copy.
+      thinking: { type: "adaptive" },
       tools: [
         {
           name: "deliver_content",

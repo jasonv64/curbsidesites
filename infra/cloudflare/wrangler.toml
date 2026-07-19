@@ -3,19 +3,32 @@
 # Secret:  npx wrangler secret put RESEND_API_KEY   (optional — failover alerts)
 name = "curbside-edge"
 main = "worker.js"
+account_id = "3e3019b287c3608533b67f6ed77497d3"
 compatibility_date = "2026-07-01"
 
 # `*/*` catches ALL traffic entering the zone — the platform subdomains, the
 # admin, AND Cloudflare-for-SaaS custom hostnames (client domains).
+# NOTE: the zone-wide catch-all pattern (see RUNBOOK 6.4) additionally requires
+# Cloudflare for SaaS to be enabled on the zone — that's Phase 6.6. Until then
+# these explicit patterns cover the apex and every platform subdomain; add the
+# catch-all back when custom hostnames go live, or client domains won't route.
 routes = [
-  { pattern = "*/*", zone_name = "curbsidesites.com" }
+  { pattern = "curbsidesites.com/*", zone_name = "curbsidesites.com" },
+  { pattern = "*.curbsidesites.com/*", zone_name = "curbsidesites.com" }
 ]
 
 [vars]
 # The Container App FQDN — RUNBOOK.md Phase 5 prints it.
-ORIGIN_HOST = "REPLACE-ME.azurecontainerapps.io"
+ORIGIN_HOST = "curbside-app-01.delightfulwave-f8a3af8b.westus3.azurecontainerapps.io"
+# Hosts that are not sites of their own, redirected to the canonical marketing
+# host. A Cloudflare Redirect Rule already does this for the bare apex; `www`
+# was left out and 404ed (it reaches the app, matches no tenant, and the app
+# is right to refuse). Kept here rather than in the dashboard so the platform's
+# host policy is one reviewable list instead of split across two systems.
+REDIRECT_HOSTS = "www.curbsidesites.com"
+CANONICAL_HOST = "sites.curbsidesites.com"
 # The storage account's blob endpoint host — RUNBOOK.md Phase 4.
-SNAPSHOT_HOST = "REPLACE-ME.blob.core.windows.net"
+SNAPSHOT_HOST = "curbsidestor01.blob.core.windows.net"
 # Failover alerts (optional but strongly recommended — D6 says alert immediately).
 ALERT_EMAIL = "valadezj045@gmail.com"
 ALERT_FROM = "Curbside Edge <alerts@curbsidesites.com>"
