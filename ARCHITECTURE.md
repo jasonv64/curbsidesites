@@ -3,15 +3,28 @@
 **Curbside Sites — multi-tenant website platform for local service businesses.**
 Status: decision record. Owner: Jason.
 
-This is the **single source of truth for decisions**. `TENANT-APP.md`, `CONTROL-PLANE.md`, and `GROWTH-PLANE.md` are build specs that reference decisions here by ID (D1, D2, …) rather than restating them. If a build spec contradicts this file, this file wins — or this file gets amended first, deliberately.
+This is the **single source of truth for decisions**. The build specs in `SPECS.md` (§I tenant app, §II control plane, §III growth plane) reference decisions here by ID (D1, D2, …) rather than restating them. If a build spec contradicts this file, this file wins — or this file gets amended first, deliberately.
 
-There are four documents and no others. Anything not in this set does not exist.
+### The document map (amended 2026-08-04 — this section used to say "four documents and no others"; eight build sessions later that was false and hiding drift, so the set was consolidated to eight)
+
+| Document | Role | Wins on |
+|---|---|---|
+| `ARCHITECTURE.md` | Decision record (D1–D28) + invariants (§7) | **Decisions.** Nothing overrides a settled D-entry except a deliberate amendment here. |
+| `SPECS.md` | The three build specs — Part I tenant app, Part II control plane, Part III growth plane (formerly `TENANT-APP.md` / `CONTROL-PLANE.md` / `GROWTH-PLANE.md`, merged verbatim 2026-08-04) | How to build what the decisions require |
+| `ASSUMPTIONS.md` | Mid-build calls, numbered, each with a disposition | The record of why something differs from the spec |
+| `RUNBOOK.md` | Platform operations, plus Appendix A costs, Appendix B calendar-time items, Appendix C the secrets manifest (formerly `COSTS.md` / `CALENDAR.md` / `SECRETS.md`, merged 2026-08-04) | **As-built facts.** Where the deployed system differs from a spec's description, the RUNBOOK "as built" table is the truth and the spec gets amended. |
+| `ONBOARDING.md` | Per-client procedure, written from a real onboarding | Per-client reality, known gaps |
+| `README.md` | Contributor handoff | Code-level conventions and gotchas |
+| `02-BUILD-PROMPT.md` | The forward build plan (supersedes `00-`/`01-BUILD-PROMPT.md`, which live in git history) | Session sequencing |
+| `HANDOFF.md` | Session-to-session state | What is proven vs. assumed right now |
+
+Precedence, in one line: **decisions here → as-built facts in RUNBOOK → specs → prompts.** A fact lives in exactly one of these; everything else links to it. Older documents and history reference the pre-merge filenames; the mapping above resolves them.
 
 ---
 
 ## 0. HOW TO USE THIS
 
-Sections 1–3 are settled decisions. Section 4 is the data model. Sections 5–7 are topology, sequencing, and the invariants.
+Sections 1–3 are settled decisions. Section 4 is the data model. Sections 5–7 are topology, sequencing, and the invariants. Section 8 (added 2026-08-04) holds the decisions made after the platform went live — including the open ones, marked **open**, which still need Jason. A D-entry without a status marker is settled. IDs are permanent: superseded entries stay, with a note pointing at what replaced them.
 
 **The rule that governs everything: one codebase, N tenants, zero per-client code.** Any decision that quietly violates that rule is wrong even when it's convenient, even when it's faster, even when it's just this once.
 
@@ -42,9 +55,9 @@ The stubbed features in the tenant app are the price list. They ship fully typed
 
 | Plane | What it is | Spec |
 |---|---|---|
-| **Tenant app** | The multi-tenant Next.js site that renders *any* client from a database record | `TENANT-APP.md` |
-| **Control plane** | Onboarding intake, provisioning, secrets, billing, fleet health dashboard | `CONTROL-PLANE.md` |
-| **Growth plane** | Review aggregation, analytics, monthly report, content pipeline, local SEO ops | `GROWTH-PLANE.md` |
+| **Tenant app** | The multi-tenant Next.js site that renders *any* client from a database record | `SPECS.md` Part I |
+| **Control plane** | Onboarding intake, provisioning, secrets, billing, fleet health dashboard | `SPECS.md` Part II |
+| **Growth plane** | Review aggregation, analytics, monthly report, content pipeline, local SEO ops | `SPECS.md` Part III |
 | **Comms** | Client change requests. **v1 lives inside the tenant app's client portal** (see D9); it becomes its own plane when SMS ships. | — |
 
 Planes communicate through the database and typed contracts. Never by reaching into each other's internals.
@@ -77,10 +90,10 @@ One Next.js application (latest stable, App Router, TypeScript, `src/`). Tenant 
 | CDN / WAF / DNS | **Cloudflare** | |
 | Customer domains + TLS | **Cloudflare for SaaS — Custom Hostnames** | Auto-provisions and renews a TLS cert per client domain. This is the specific product that solves "hundreds of customer-owned domains, one origin." |
 | Billing | **Stripe Billing** | Curbside's own Stripe account. |
-| Email (transactional) | **Azure Communication Services Email** or **Resend** — pick one, name it in `ASSUMPTIONS.md`, do not use both | Per-domain SPF/DKIM/DMARC required (see §6). |
-| Error tracking | **Sentry**, tagged by `tenant_id` | |
+| Email (transactional) | **Resend** (picked — ASSUMPTIONS #1) | Per-domain SPF/DKIM/DMARC required (see §6). |
+| Error tracking | **Sentry**, tagged by `tenant_id` — **not yet wired** (ASSUMPTIONS #77; interim alerting = edge Worker failover emails + Azure Monitor + in-app alarms). The row stands as the intended vendor. | |
 | Reviews | **Google Places API (v1)** and **Yelp Fusion API** | Plain `fetch` against REST. No SDKs. |
-| Analytics | **Plausible** or **PostHog** — pick one, name it in `ASSUMPTIONS.md` | Self-reported conversions still write to our own `events` table (D14). |
+| Analytics | **Plausible** (picked — ASSUMPTIONS #2; cookieless, which is load-bearing for D13) | Self-reported conversions still write to our own `events` table (D14). |
 | AI | **Anthropic API** | Change-request parsing, content drafting, quote assistant. |
 | SMS (deferred) | **Twilio** | Blocked on A2P 10DLC. See §6 and D9. |
 
@@ -117,7 +130,9 @@ A job exports each tenant to static HTML in Blob Storage — nightly and after e
 - **Processing payments *for* clients is deferred.** When it ships it ships as **Stripe Connect Standard**: the client owns their Stripe account and is the merchant of record, Curbside takes an application fee, and chargeback liability on a disputed $4,000 lift-kit deposit stays with them. **We never become the aggregator.**
 
 ### D8 — The client owns their credentials, always
-We never take registrar credentials. We never take a Google Business Profile login. The intake form asks *which registrar they use* — the name, nothing more — and we send them registrar-specific nameserver instructions. For GBP we request **manager** access.
+We never take registrar credentials. We never take a Google Business Profile login. The intake form asks *which registrar they use* — the name, nothing more — and we send them registrar-specific **DNS record instructions** (a CNAME plus an ownership TXT — see D15). For GBP we request **manager** access.
+
+*(Amended 2026-08-04: originally said "nameserver instructions." What shipped and was proven on the first go-live is record instructions — the client's DNS stays at their registrar, which is more D8 than a nameserver move ever was. See ASSUMPTIONS #40 and D22 for the apex-domain wrinkle.)*
 
 **Rationale:** credential custody is liability with no upside, and in a referral-driven local market, being the guy who held a client's domain hostage ends the company.
 
@@ -173,7 +188,9 @@ The `events` table records conversions: `call_tap`, `form_submit`, `map_tap`, `n
 ### D15 — Compute topology
 **Azure Container Apps**, same region as the Postgres server. **Cloudflare for SaaS (Custom Hostnames)** in front, owning every customer domain and auto-provisioning TLS per domain — roughly a dime per hostname per month, and it solves the genuinely painful part of multi-tenant custom domains.
 
-Onboarding a domain is an API call: create the Custom Hostname, hand the client registrar-specific nameserver instructions, poll until verified, flip the tenant live.
+Onboarding a domain is an API call: create the Custom Hostname, hand the client registrar-specific **DNS record instructions** (CNAME to the fallback origin + ownership TXT — the domain stays at their registrar), poll until verified, flip the tenant live.
+
+*(Amended 2026-08-04: "nameserver instructions" corrected to record instructions — that is how Cloudflare for SaaS actually works, and it's what shipped (ASSUMPTIONS #40). Field wrinkle from the first go-live: a CNAME can't exist at a zone apex, so on registrars without flattening (GoDaddy) the custom hostname is `www` plus a registrar apex-forward — see D22, which also owns the HTTPS requirement on that forward.)*
 
 *Rejected:* Vercel. Excellent Next.js host, but it puts the app in a different cloud from its database and costs meaningfully more at 200 tenants.
 
@@ -262,9 +279,11 @@ change_requests  tenant_id, raw_message, parsed_diff, status, confirmed_at
 
 ## 5. ENVIRONMENTS
 
-- **staging** — full clone, seeded with demo tenants. Every deploy lands here and passes the semantic smoke suite first.
-- **canary** — 2–3 real tenants get prod deploys first, 30-minute soak, automated verification, then the fleet promotes.
-- **rollback** — **one action, reachable from a phone.** If a deploy breaks 200 businesses' phone lines at 6pm on a Friday, the recovery path cannot require a laptop.
+*(Amended 2026-08-04. The original section described staging and canary environments that were never provisioned — zero references to either exist outside this file. What follows is what actually exists, plus the deferred decision.)*
+
+- **production** — one Container App, max-replicas 1 (RUNBOOK as-built). The availability story at this scale is the edge Worker + static failover snapshots (D6), which is deployed and current — not a second environment.
+- **rollback** — **one action, reachable from a phone.** Exists and was verified from a phone (RUNBOOK 11.4). If a deploy breaks 200 businesses' phone lines at 6pm on a Friday, the recovery path cannot require a laptop.
+- **staging / canary** — **deferred, not built** (see D25). Until they exist: every deploy must pass `npm run verify` locally first, CI must be green (D24), and any change that reshapes live tenants' pages (registry cuts, section changes) gets soaked on the two demo-fleet tenants before the fleet sees it. Re-decide at the first month with 10+ paying tenants — that's when "the demo tenants caught it" stops being enough.
 
 ---
 
@@ -275,8 +294,8 @@ AI compresses the code. It does not compress any of the following, and every one
 - **Twilio A2P 10DLC.** Precisely: *receiving* inbound SMS is unregulated, but *sending* any SMS to a US recipient is A2P traffic requiring brand + campaign registration — carriers filter unregistered traffic and Twilio bills a penalty on it. Our design's safety gate is an **outbound** confirmation, so **the gate is the regulated part.** Brand approval is fast; **campaign review currently runs 10–15 days.** Registration requires a live website with a privacy policy, so curbsidesites.com is a dependency of the comms plane.
   - **Scope trap:** the client update line is *Curbside messaging its own clients* — one brand, one campaign, customer-care use case. But **missed-call text-back is a client's business messaging that client's customers**, which is per-client A2P and requires **ISV onboarding with a brand and campaign registered per client.** Materially bigger compliance surface. Not a weekend feature. Price and sequence accordingly.
 - **Google Business Profile verification** — postcard or video, days to weeks, per client.
-- **Email deliverability** — SPF/DKIM/DMARC **per client domain**, plus sending-domain warming. A lead notification silently landing in spam is worse than no form at all: the owner concludes the site produces nothing and churns without ever telling you why. Verify deliverability at onboarding *and* continuously (`CONTROL-PLANE.md` §5).
-- **DNS propagation** and client responsiveness on nameserver changes. Clients are slow. Chase automatically.
+- **Email deliverability** — SPF/DKIM/DMARC **per client domain**, plus sending-domain warming. A lead notification silently landing in spam is worse than no form at all: the owner concludes the site produces nothing and churns without ever telling you why. Verify deliverability at onboarding *and* continuously (`SPECS.md` §II Part 5) — resolved at the registrable domain, never the `www` host (D22).
+- **DNS propagation** and client responsiveness on DNS record changes. Clients are slow. Chase automatically.
 - **Stripe account review**, MSA drafting, E&O insurance, California LLC formation.
 
 The build may well be a focused Sunday. **Going live is not.**
@@ -292,8 +311,57 @@ The build may well be a focused Sunday. **Going live is not.**
 5. **Demo and real data never appear in the same view.**
 6. **NAP is byte-identical everywhere** — header, footer, contact, schema, `llms.txt`, GBP, citations — which is automatic because it has exactly one home. Call-tracking numbers use **dynamic number insertion in the rendered page only**; the canonical NAP number never changes anywhere else. Get this wrong and the SEO product sabotages the SEO product.
 7. **`aggregateRating` JSON-LD is emitted ONLY when live review rows exist.** Never from `is_demo` rows. Fake structured data is a penalty, not a boost — applied to a real person's livelihood.
-8. **Accessibility gate in CI. It fails the build.**
-9. **Semantic health checks, not status-code health checks.**
-10. **Sitemap, robots, `llms.txt`, JSON-LD, privacy policy: all generated. Never hand-maintained.**
-11. **The Curbside backlink in each tenant footer varies its anchor text per tenant** and points somewhere genuinely useful. Two hundred identical footer links with identical anchors is a textbook link-scheme footprint — a single point of failure that would penalize 200 client sites simultaneously.
+8. **Accessibility gate in CI. It fails the build.** *Status note (2026-08-04): the gate exists and mechanically fails the build — and CI has been red on every run to date while work shipped anyway, so today it is advisory in practice. D24 makes restoring this invariant's truth the next session's exit criterion. Second gap: the axe suite runs against the two seeded demo tenants only, not "every tenant's rendered pages" as D12 claims — no real client's approved tokens have been through it.*
+9. **Semantic health checks, not status-code health checks.** *Scope note (2026-08-04): the existing checks prove self-consistency with the DB (the page shows the phone number the record holds) — they cannot catch a wrong record. What may go `live` is D26's question.*
+10. **Sitemap, robots, `llms.txt`, JSON-LD, privacy policy: all generated. Never hand-maintained.** *Status note (2026-08-04): currently violated in production by Cloudflare's Managed robots.txt, which prepends AI-crawler blocks (GPTBot, ClaudeBot, CCBot…) to every tenant's generated robots.txt — directly against the llms.txt discovery strategy. Open decision D27.*
+11. **The Curbside backlink in each tenant footer varies its anchor text per tenant** and points somewhere genuinely useful. Two hundred identical footer links with identical anchors is a textbook link-scheme footprint — a single point of failure that would penalize 200 client sites simultaneously. *Status note (2026-08-04): four of the five credit targets currently 404 because the marketing site (old Session 5) was never built — mass links to dead pages, the exact footprint this invariant exists to avoid. Interim fix is in the hardening session; the real fix is the marketing site.*
 12. **Never inflate a client-facing number.** Not in the monthly report, not in a demo, not in a pitch.
+
+---
+
+## 8. DECISIONS MADE AFTER GO-LIVE (2026-08-04 review)
+
+Recorded during the architecture re-validation session, from an adversarial review of the record against the deployed system. Statuses per entry; **open** entries still need Jason and nothing may build on a guessed answer to them.
+
+### D21 — dubdating.com is a test fixture, not a client
+- **Status:** settled (Jason, 2026-08-04)
+- **Decision:** The dub-dates tenant is a simulation that validated the go-live pipeline. It gets `noindex` (it is currently live and indexable with placeholder NAP — `(123) 123-1231`, "LA Street" — in public structured data). §1's ICP (trades, automotive, off-road, marine, home services) stands unchanged; dub-dates being a multi-city dating service does not widen it.
+- **Rejected alternatives:**
+  - Treat it as a real client — no MSA, no billing, and the record data is fabricated; calling it a client would make the fake NAP a live client-quality incident.
+  - Leave it indexable — fake structured data under a real domain violates the spirit of Invariant 12 and trains Google on junk.
+
+### D22 — Domain attachment: DNS records, with the apex handled deliberately
+- **Status:** settled
+- **Decision:** Clients attach domains via a CNAME (to the fallback origin) plus an ownership TXT; their DNS stays at their registrar (D8). Where the desired hostname is a zone **apex** on a registrar without CNAME flattening (GoDaddy), the custom hostname is `www` and the registrar apex-forward points at it — and that forward **must land on HTTPS** (the current one hops through plain HTTP). Instruction generation must branch on apex-vs-subdomain and registrar flattening support. Email-deliverability checks (SPF/DKIM/DMARC) resolve at the **registrable domain**, never the site hostname — checking `_dmarc.www.<domain>` is structurally always empty and would page on every future client.
+- **Rejected alternatives:**
+  - Nameserver delegation to Cloudflare — flattens the apex, but moves the client's DNS out of their registrar, which contradicts D8's "they keep the domain" promise as clients understand it.
+- **Invariants:**
+  - "A client's canonical entry point never traverses plain HTTP." — **catastrophe if violated:** the flagship "they keep their domain" promise ships with a cleartext hop on every visit to the apex.
+
+### D23 — The origin/edge boundary is load-bearing: lock ACA ingress to the edge
+- **Status:** settled (Jason, 2026-08-04 — origin lock only; repo visibility deliberately left public, revisit if the leak repro remains published after the leak is fixed)
+- **Decision:** The Container App origin must reject traffic that did not come through our Cloudflare Worker (shared-secret header validated in `src/proxy.ts`, or CF IP restriction on ingress). Today the origin FQDN is public (it's in `wrangler.toml`, in a public repo) and honors attacker-supplied `X-Forwarded-Host` — every edge control (WAF, rate limits, redirects, failover) is optional to anyone who addresses the origin directly.
+- **Invariants:**
+  - "`TRUST_PROXY_HOST=1` is only ever set behind an ingress that authenticates the edge." — **catastrophe if violated:** anyone impersonates any tenant's hostname with one curl header, and the draft-content leak's published repro works against the bare origin.
+
+### D24 — CI goes green before anything else builds, then `main` gets protected
+- **Status:** settled (Jason, 2026-08-04)
+- **Decision:** CI has failed on every run in the repo's history while eight sessions and a go-live shipped over it. The next build session's exit criterion is one green run on `main` (fix the failing e2e step, named from the run log), followed by branch protection requiring `verify`. Until then, §7 #8's enforcement claim is suspended (see its status note) — the record does not cite a red gate as proof.
+- **Rejected alternatives:**
+  - Amend the claim and defer the fix — leaves the axe and lifecycle suites decorative while live-tenant-affecting sessions (registry cuts) are queued.
+
+### D25 — Staging and canary: deferred, on a named trigger
+- **Status:** deferred
+- **Decision:** §5 originally described staging + canary environments that were never provisioned. Deferred deliberately (they roughly double the infra bill at a stage with one fixture tenant), **not** abandoned: re-decide at the first month with 10+ paying tenants, or before the first registry-cutting session that reshapes live pages — whichever comes first. Until then the §5 interim rules apply (local `verify`, green CI, demo-fleet soak).
+
+### D26 — What a tenant must prove before `status='live'` (the data-quality gate)
+- **Status:** open — needs Jason to settle the gate's exact contents
+- **Question:** `maybeGoLive` checks brand approval + domain verification, but nothing checks the *record* describes a real business. The fixture went live with placeholder NAP in public JSON-LD and 0 of 10 image slots populated, and every §7 check passed — the checks prove self-consistency, not correctness. Proposed gate: phone parses and isn't a placeholder pattern, address geocodes, every image slot has `url` + `credit`, and the operator confirms NAP against a source outside our own database.
+
+### D27 — Cloudflare Managed robots.txt vs. the llms.txt strategy
+- **Status:** open — needs Jason (one dashboard toggle, but it's a product decision)
+- **Question:** Cloudflare's Managed robots.txt currently prepends AI-crawler blocks (GPTBot, ClaudeBot, CCBot, `Content-Signal: ai-train=no`) to every tenant's robots.txt. The product ships `llms.txt` on every tenant specifically to court AI-assistant discovery ("who does boat service near me"). These are opposite bets. Either disable the managed feature (robots.txt returns to fully generated, Invariant 10 restored) or keep it and rewrite the llms.txt story. Note the distinction available: `ai-train=no` vs. blocking AI *search/assistant* crawlers — Cloudflare's signal can express "don't train, do answer."
+
+### D28 — Single-operator continuity
+- **Status:** open — needs Jason
+- **Question:** Production access is one person: credentials in `~/.curbside-env-01` on one laptop (plus a stale, world-readable copy **inside the working tree** — delete it), rollback verified from one phone, one staff account bootstrapped, failover alerts to one personal Gmail. Nothing in the record says what happens if that person is unavailable for a week. Minimum viable answer: a sealed break-glass credential set, a second alert recipient, and a one-page "if Jason is unreachable" note. Decide the shape; the hardening session implements it.

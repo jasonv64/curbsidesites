@@ -8,14 +8,16 @@ trusts, and the instrumentation feeding it. One codebase, N tenants, zero
 per-client code in core — that rule (D1) governs everything; the full
 decision record lives in `../ARCHITECTURE.md` (D1–D20 + invariants). This
 repo now covers Sessions 1 (tenant app), 2 (control plane), 3 (growth
-plane) **and 4 (production)** of the build plan in `../00-BUILD-PROMPT.md`.
+plane) **and 4 (production)** of the original build plan; the forward plan
+is `02-BUILD-PROMPT.md` (which superseded `00-`/`01-BUILD-PROMPT.md` on
+2026-08-04 — they live in git history).
 
 This README is the handoff document: you should be able to continue from
 this file alone.
 
 **Going to production?** That's `RUNBOOK.md` — the ordered, executable path
-from this local setup to live tenants on Azure + Cloudflare, with `COSTS.md`
-(what it costs at 3/50/200 tenants) and `CALENDAR.md` (the real-world waits
+from this local setup to live tenants on Azure + Cloudflare, with `RUNBOOK.md Appendix A`
+(what it costs at 3/50/200 tenants) and `RUNBOOK.md Appendix B` (the real-world waits
 to start on day one). Session 4 also wired the production seams: Key Vault
 secret provider, Azure Blob uploads, the edge Worker
 (`infra/cloudflare/`), the `Dockerfile`, and the failover snapshot pipeline.
@@ -210,7 +212,7 @@ surface: the intake form. Both are reserved slugs at the DB level.
 
 ## The growth plane (Session 3) — read this once
 
-**The product is the monthly report** (`GROWTH-PLANE.md` Part 5); everything
+**The product is the monthly report** (`SPECS.md §III` Part 5); everything
 else in `src/lib/growth/` is instrumentation feeding it. It leads with one
 number — how many people tried to contact you this month — sourced from the
 leads table (form submissions, server truth) plus call_tap/map_tap events.
@@ -396,7 +398,7 @@ npm run images:source <slug> -- --auto   # demo bootstrap: apply top pick per sl
 Provider: Pexels when `PEXELS_API_KEY` is set (better quality), otherwise
 keyless **Openverse** (CC-licensed; the gallery page renders the required
 attributions from `images.credit`). `ANTHROPIC_API_KEY` enables `--ai`. See
-SECRETS.md. **`db:seed` runs `--auto` for both demo tenants automatically**
+RUNBOOK.md Appendix C. **`db:seed` runs `--auto` for both demo tenants automatically**
 (skipped in CI or with `SKIP_IMAGE_SOURCING=1`; candidates cache under
 `.data/image-candidates/` so re-seeds are offline-safe and keep reviewed
 picks). The human review gate is deliberate: expect to reject a third to
@@ -426,10 +428,10 @@ exist yet; the namespace is reserved in the registry docs.)
    is first because a silent lead-notification failure is the churn machine
    (CONTROL-PLANE Part 5).
 2. **Analytics** — set `config.domain`, flip live. Test: script tag in HTML.
-3. **Reviews** — client-owned Google/Yelp keys per SECRETS.md, place/business
+3. **Reviews** — client-owned Google/Yelp keys per RUNBOOK.md Appendix C, place/business
    ids in config, flip live, `npm run fetch:reviews <slug>`. Test: real
    reviews render, aggregateRating appears in JSON-LD.
-4. **Instagram** — token per SECRETS.md, flip live, `npm run fetch:instagram
+4. **Instagram** — token per RUNBOOK.md Appendix C, flip live, `npm run fetch:instagram
    <slug>`. Mind the 60-day token expiry.
 5. **Change-request AI** — Anthropic key, flip live. Demo parser keeps
    working as the fallback.

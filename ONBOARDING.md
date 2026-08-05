@@ -31,12 +31,13 @@ the client's real domain half-working in public.
 
 ---
 
-## One-time platform setup (before ANY custom domain works)
+## One-time platform setup — **ALL FIVE DONE as of 2026-07-19** (www.dubdating.com went live through them end to end)
 
-Custom domains need Cloudflare for SaaS. Until all five are done, the platform
-silently uses the **demo** hostname provider and no real domain will connect.
+Kept for rebuild-from-scratch reference. Custom domains need Cloudflare for
+SaaS; until all five are done, the platform silently uses the **demo** hostname
+provider and no real domain will connect.
 
-- [ ] **1. Enable Cloudflare for SaaS** on the `curbsidesites.com` zone.
+- [x] **1. Enable Cloudflare for SaaS** on the `curbsidesites.com` zone.
       Dashboard → SSL/TLS → Custom Hostnames → **Enable**, then add payment
       information (required on non-Enterprise zones even though the bill is $0).
       Free plan includes **100 custom hostnames**; beyond that it is $0.10 each
@@ -50,17 +51,18 @@ silently uses the **demo** hostname provider and no real domain will connect.
       curl -s "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/custom_hostnames" \
         -H "Authorization: Bearer $CF_API_TOKEN" | python3 -m json.tool | head -20
       ```
-- [ ] **2. Set the fallback origin** to `sites-origin.curbsidesites.com`.
+- [x] **2. Set the fallback origin** to `sites-origin.curbsidesites.com`.
       That record already exists (`AAAA 100::`, proxied) and is what
       `CF_FALLBACK_ORIGIN` defaults to in `src/lib/adapters/cloudflare/live.ts`.
-- [ ] **3. Create a narrow API token** — permission `SSL and Certificates: Edit`
+- [x] **3. Create a narrow API token** — permission `SSL and Certificates: Edit`
       on this zone only. **Not** the broad setup token from RUNBOOK Phase 6;
       this one is read by the running app and lives in Key Vault.
-- [ ] **4. Store it and set the zone id together** (see below).
-- [ ] **5. Restore the catch-all Worker route.** `infra/cloudflare/wrangler.toml`
-      currently lists explicit patterns because `*/*` is rejected until
-      Cloudflare for SaaS is on. **Client domains will not route until this is
-      changed back** — the explicit patterns only match `*.curbsidesites.com`.
+- [x] **4. Store it and set the zone id together** (see below).
+- [x] **5. Restore the catch-all Worker route.** Done 2026-07-19 —
+      `infra/cloudflare/wrangler.toml` now routes `*/*`. (While Cloudflare for
+      SaaS was off, `*/*` was rejected and explicit `*.curbsidesites.com`
+      patterns stood in — those do NOT match client domains. Do not revert
+      while custom hostnames are live.)
 
 ### Step 4 — both halves, or neither
 
@@ -278,19 +280,26 @@ Their domain is always theirs. Nothing here touches their registrar account.
 
 ---
 
-## Known gaps
+## Known gaps (reconciled 2026-08-04 — two earlier entries here were stale: Cloudflare for SaaS IS enabled and the `*/*` route IS restored, both proven by the 2026-07-19 go-live)
 
-- **Cloudflare for SaaS is not enabled** — the five prerequisites above are
-  outstanding, so no custom domain works yet. Everything through step 3 does.
 - **Draft tenants leak content.** An anonymous request to a `draft` tenant's
   platform subdomain returns 404 with the tenant's business name, phone,
   services, and the owner's intake `voice` text still in the response body
   (Next streams the page before the layout's gate resolves). Slugs are
-  guessable from business names. Queued as a Session A hardening item in
-  `01-BUILD-PROMPT.md`. **Until it is fixed, treat a draft site as public** —
-  don't put anything in intake you wouldn't show a competitor.
-- **The Worker route is not the catch-all** — client domains won't route until
-  `wrangler.toml` is restored to `*/*`.
-- **Resend is not set up** (RUNBOOK Phase 8) — no automated client emails, so
-  the DNS instructions and the verification chase must be sent by hand.
+  guessable from business names. Queued in `02-BUILD-PROMPT.md` Session 1.
+  **Until it is fixed, treat a draft site as public** — don't put anything in
+  intake you wouldn't show a competitor.
+- **The origin is publicly addressable** and honors forged `X-Forwarded-Host`
+  (D23) — locking ACA ingress to the edge is the top item of
+  `02-BUILD-PROMPT.md` Session 1.
+- **Resend status is contradictory — verify before trusting automated emails.**
+  This file previously said "not set up"; DNS now shows a configured sending
+  domain (`send.curbsidesites.com` SPF, `resend._domainkey` DKIM, DMARC
+  present). Confirm with `/api/status` and the `synthetic_checks` table
+  (`kind='form_delivery'`) before relying on the chase/instruction emails;
+  until confirmed, send the DNS records by hand.
 - **Stripe is deferred** (RUNBOOK Phase 9) — no billing on a "paying" client.
+  The billing build is `02-BUILD-PROMPT.md` Session 2.
+- **dubdating.com is a test fixture, not a client (D21)** — it is currently
+  live and indexable with placeholder NAP; `noindex` is queued in
+  `02-BUILD-PROMPT.md` Session 1.

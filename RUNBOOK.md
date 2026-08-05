@@ -16,9 +16,9 @@ provisioned any of these services. Competence assumed; familiarity not.
 - ⚠️ marks a step that can destroy something irreversible or half-succeed
   silently. The warning comes *before* the step.
 - Real-world waits (Twilio review, Stripe verification, DNS, GBP) live in
-  `CALENDAR.md`. **Read it first and start its day-one items today** — none 
+  `RUNBOOK.md Appendix B`. **Read it first and start its day-one items today** — none 
   of them block Phase 1, and all of them block going live for real clients.
-- What everything costs, at 3 / 50 / 200 tenants: `COSTS.md`.
+- What everything costs, at 3 / 50 / 200 tenants: `RUNBOOK.md Appendix A`.
 
 **The shape of the thing you're building:**
 
@@ -49,7 +49,7 @@ actually shipped. Read this before copying any `$Variable` verbatim.
 | `curbside-prod`, `curbside-app`, … | **`-01` suffix on every name** (`curbside-prod-01`, `curbside-app-01`, `curbsideconreg01`) | Chosen at provisioning |
 | Postgres **16** | **Postgres 18** | Local `docker-compose.yml` moved to 18 to match. ⚠️ The 18 image stores data in a major-version subdirectory — the volume mounts at `/var/lib/postgresql`, **not** `/var/lib/postgresql/data`, or the container won't start |
 | admin user `curbside_admin` | **`curbsidepgadmin01`** | The connection strings must match |
-| Storage `Standard_LRS` | **`Standard_RAGRS`** | Portal default, kept; ~$10–15/mo above COSTS.md. Reversible with `az storage account update --sku Standard_LRS` |
+| Storage `Standard_LRS` | **`Standard_RAGRS`** | Portal default, kept; ~$10–15/mo above RUNBOOK.md Appendix A. Reversible with `az storage account update --sku Standard_LRS` |
 | `--max-replicas 3` | **`--max-replicas 1`** | Per-instance ISR cache — see the note in 5.2 |
 | Phase 9 (Stripe) | **deferred** | Not needed to put demos on the internet |
 | A freshly-bought domain with no mail | **GoDaddy NS + live Microsoft 365 mail** | ⚠️ The Phase 6 nameserver swap will take mail down unless you do **6.1a** first |
@@ -180,12 +180,12 @@ az postgres flexible-server parameter set --resource-group $RG --server-name $PG
 ```
 
 Why these choices: **B1ms** (1 vCPU / 2 GiB) is genuinely enough for 3
-tenants and costs ~$13/mo — `COSTS.md` says when to move to B2s. **Postgres
+tenants and costs ~$13/mo — `RUNBOOK.md Appendix A` says when to move to B2s. **Postgres
 18** matches the local container exactly (`docker-compose.yml`) — keep the two
 in lockstep whichever version you pick. **Public access + firewall** (not
 VNet injection) is the deliberate v1 network model: a solo operator gets a
 debuggable database and loses nothing that matters yet; the VNet upgrade
-path is noted in COSTS.md at the 50-tenant mark.
+path is noted in RUNBOOK.md Appendix A at the 50-tenant mark.
 
 ### 2.2 [RUN] Let Azure services (the app, later) reach it
 
@@ -197,7 +197,7 @@ az postgres flexible-server firewall-rule create --resource-group $RG --name $PG
 The `0.0.0.0–0.0.0.0` rule is Azure's magic value for "resources inside
 Azure" — coarse, and the accepted v1 trade (the roles still need passwords,
 TLS is required, and RLS holds inside). Tighten to VNet integration when
-COSTS.md says so.
+RUNBOOK.md Appendix A says so.
 
 ### 2.3 [RUN] Point the repo's tooling at the real server, migrate
 
@@ -314,7 +314,7 @@ az keyvault secret set --vault-name $KV --name cron-token --value $CRON_TOKEN
 ```
 
 Integration secrets (the app resolves these itself by `kv_secret_ref` —
-SECRETS.md is the full manifest). Seed the one you certainly have:
+RUNBOOK.md Appendix C is the full manifest). Seed the one you certainly have:
 
 ```powershell
 # [YOU] get the key at console.anthropic.com → API keys
@@ -626,7 +626,7 @@ secret *value* appears in no response.
    also do the nameserver swap.
 2. If bought elsewhere: Cloudflare dash → Add site → Free plan → it shows
    two nameservers → set them at the registrar. Propagation: minutes to
-   ~24 h (CALENDAR.md).
+   ~24 h (RUNBOOK.md Appendix B).
 3. Note your **Zone ID** (dash → the domain → Overview, right column) and
    **Account ID** (same panel).
 
@@ -1071,7 +1071,7 @@ scheduled jobs listed with a successful execution each.
 4. Add a DMARC record yourself (Resend won't force it, inboxes increasingly
    do): TXT `_dmarc.curbsidesites.com` =
    `v=DMARC1; p=none; rua=mailto:valadezj045@gmail.com` — `p=none` while
-   warming (CALENDAR.md), tighten to `quarantine` after 2–4 clean weeks.
+   warming (RUNBOOK.md Appendix B), tighten to `quarantine` after 2–4 clean weeks.
 
    ⚠️ **Registrars publish their own DMARC default — replace it, don't add to
    it.** As built, GoDaddy had already published
@@ -1115,7 +1115,7 @@ your real Gmail as the owner email. Then:
    spam — of a Gmail account. Gmail → open the message → ⋮ → Show original →
    confirm `SPF: PASS`, `DKIM: PASS`, `DMARC: PASS`.
 2. If it's in spam: you're warming a brand-new domain (expected the first
-   days, CALENDAR.md). Send a handful of real, human messages from
+   days, RUNBOOK.md Appendix B). Send a handful of real, human messages from
    `hello@curbsidesites.com` (Resend → no; use any mailbox provider on the
    domain, or simply keep volumes tiny) and re-test tomorrow. Do not blast.
 3. [RUN] Clean up the fake tenant: admin → the test tenant → Offboard.
@@ -1139,7 +1139,7 @@ client's domain will need for its own sending.
 ## PHASE 9 — Stripe (D7, D19)
 
 **Requires:** Phase 6 (the webhook needs a public URL). Start the account
-**today** regardless (CALENDAR.md — verification can take days).
+**today** regardless (RUNBOOK.md Appendix B — verification can take days).
 
 ### 9.1 [YOU] Account + ACH + dunning
 
@@ -1463,7 +1463,7 @@ that command from your phone once already.
 Key Vault (via `kv_secret_ref` / secretref): `curbside-anthropic-api-key`,
 `curbside-resend-api-key`, `curbside-cloudflare-api-token`,
 `curbside-stripe-webhook-secret`, the five infra secrets above, and
-per-tenant integration keys per SECRETS.md as clients go live.
+per-tenant integration keys per RUNBOOK.md Appendix C as clients go live.
 
 ## APPENDIX B — Half-successes index (the ways steps lie)
 
@@ -1490,3 +1490,288 @@ per-tenant integration keys per SECRETS.md as clients go live.
 | `SPF: FAIL` on the 8.3 Gmail test, records look right | Two `v=spf1` TXT records = `permerror`, **both** fail. Merge Microsoft's and Resend's includes into one line (8.1) |
 | Resend mail quarantined during warmup | Registrar's default DMARC at `p=quarantine` was never replaced; its `rua` also points at the registrar, so you get no reports (8.1) |
 | Mail authenticates until someone forwards it, then fails | M365 DKIM never enabled — `selector1/2._domainkey` empty, so only SPF alignment is carrying it (6.1a) |
+
+
+---
+
+<!-- Appendices merged 2026-08-04 from formerly separate RUNBOOK.md Appendix A, RUNBOOK.md Appendix B, RUNBOOK.md Appendix C — content preserved; old filenames in older docs/history map here. -->
+
+# APPENDIX A — COSTS: what the infrastructure actually costs
+
+Monthly, USD, `westus3`, pay-as-you-go list prices as of July 2026 —
+sanity-checked against the Azure pricing page, but prices drift: treat
+anything within ±20% as "as expected" and re-price in the Azure calculator
+before making a decision that hinges on a single line.
+
+Three scales: **3 tenants** (this weekend), **50** (~$17k MRR at the D19
+blended average), **200** (~$69k MRR). The pattern to notice before the
+tables: infrastructure stays around **1–2% of MRR at every scale**. Nothing
+here is ever the business's problem — D19 said it first: the hard part was
+never the code, and it isn't the hosting bill either.
+
+## The bill, itemized
+
+| Service | 3 tenants | 50 tenants | 200 tenants |
+|---|---|---|---|
+| **Azure Postgres Flexible** | **B1ms** (1 vCPU/2 GiB) + 32 GB ≈ **$17** | **B2s** (2 vCPU/4 GiB) + 64 GB ≈ **$57** | **GP D2ds_v5** (2 vCPU/8 GiB) + 128 GB, **zone-redundant HA** ≈ **$300** |
+| **Azure Container Apps** (consumption) | 1× 1 vCPU/2 GiB, min-replicas 1, mostly idle-billed ≈ **$35** | 2 replicas, busier duty cycle ≈ **$110** | 3–5 replicas ≈ **$300** |
+| ACA cron jobs (tick + nightly export) | ≈ $2 | ≈ $4 | ≈ $8 |
+| **Azure Container Registry** | Basic **$5** | Basic $5 (with image purging — see breakpoints) | Standard **$20** |
+| **Azure Key Vault** | ~$0 (per-10k-ops pricing; the 5-min cache keeps ops tiny) | ~$1 | ~$3 |
+| **Azure Blob Storage** (LRS) | <$1 | ~$5 | ~$20 |
+| Azure Monitor + Log Analytics | ~$2 | ~$15 | ~$50 |
+| **Cloudflare** zone | Free plan $0 | $0 | $0 |
+| Cloudflare **ACM** (the `*.sites.` wildcard cert) | **$10** | $10 | $10 |
+| Cloudflare **for SaaS** custom hostnames | $0 (first 100 free) | $0 | 100 over free × $0.10 = **$10** |
+| Cloudflare **Workers** (the edge router) | Free tier $0 | Paid **$5** (free tier's 100k req/day runs out ~here) | $5 + ~$5 overage |
+| **Resend** | Free (3k emails/mo) | Pro **$20** | Scale **$90** |
+| **Plausible** (only if/when sold — Curb+ feature) | $0 | ~$19 (100k views) | ~$69 (1M views) |
+| **Anthropic API** (content drafts, change-request parsing) | ~$10 | ~$60 | ~$250 |
+| **Sentry** (D3 — not yet wired, ASSUMPTIONS #77) | $0 | Team ~$26 | ~$80 |
+| Domain (curbsidesites.com) | ~$1 (≈$10/yr) | $1 | $1 |
+| **Total** | **≈ $85/mo** | **≈ $340/mo** | **≈ $1,150/mo** |
+| As % of MRR (D19 blend ≈ $346/tenant) | 8% of $1,038 | 2.0% | 1.7% |
+
+Not in this bill, deliberately: **Stripe fees** (per-transaction: ~0.8%
+capped at $5 on ACH — the reason ACH is the D7 default — vs 2.9% + 30¢ on
+cards: at 200 tenants that's roughly **$800/mo card vs $170/mo ACH**, the
+single biggest "infra" number on this page if you let clients default to
+cards); **Twilio** (deferred behind A2P, see RUNBOOK.md Appendix B — brand $44
+one-time, ~$16/mo per campaign when it ships); stock-photo API keys (free
+tiers); and your laptop.
+
+## What breaks first at each scale — and the move
+
+**Leaving 3 → ~15 tenants: the database connection budget.**
+B1ms allows ~50 connections. The app pool + control pool + two cron jobs
+fit; the moment ACA scales to a second replica (each replica brings both
+pools), or you run tests against prod while the tick fires, you'll see
+`remaining connection slots are reserved`. That error looks like an outage
+but is a SKU line: **move to B2s** (`az postgres flexible-server update
+--sku-name Standard_B2s` — minutes of downtime, do it at night, snapshot
+first). Watch: the `pg-cpu-90` alert also fires when B-series **burst
+credits** run dry under sustained load — same move.
+
+**Leaving ~50: three at once.**
+1. **Burstable → General Purpose Postgres.** Not for speed — for **HA**.
+   Burstable doesn't support zone-redundant high availability, and at 50
+   paying care-plans "the DB VM rebooted for 4 minutes" stops being
+   acceptable. D2ds_v5 + HA roughly quintuples the DB line; that's what the
+   9× MRR growth was for. Do the **VNet integration** move in the same
+   maintenance window (RUNBOOK 2.1 called this shot) — the allow-azure
+   firewall rule was a solo-operator convenience, not an end state.
+2. **The single replica.** At 2+ replicas two Session-1 assumptions
+   surface: the in-memory rate limiter becomes per-replica (ASSUMPTIONS
+   #17 — honeypot+Zod still hold the line) and the ISR cache splits
+   (more DB reads; harmless). Nothing to build yet; know it's why the
+   numbers moved.
+3. **Workers free tier** (100k req/day ≈ 1.2 req/s average) — the router
+   dies with a 1015/1027 error page when exhausted. $5/mo fixes it;
+   turn it on *before* 50 tenants, not after the first throttled evening.
+
+**Leaving ~200: nothing on this page.**
+The stack as designed carries 200 comfortably (that was D1's whole
+premise). What actually strains: **ACR Basic's 10 GB** fills after ~5
+two-GB image versions — either `az acr repository delete` old tags in the
+deploy ritual or go Standard; **Log Analytics** starts charging real money
+for chatty logs — cap retention at 30 days; **Yelp/Google review quotas**
+— already engineered around (staggering + `vendor_quotas`, GROWTH Part 2),
+just raise `QUOTA_<VENDOR>_PER_DAY` if you buy higher tiers; and the
+monthly **report PDF generation** burst on the 2nd (200 chromium renders —
+the stagger spreads them over 4 days by design). The genuine constraint at
+200 was stated in D19 and it isn't rentable: acquisition.
+
+## Cost hygiene rules
+
+1. **One region, forever** (D15). Cross-region egress between app and DB
+   would dwarf every optimization on this page.
+2. **Min-replicas 1, not 2**, until real traffic says otherwise — the edge
+   Worker + static failover (D6) is the availability story at small scale,
+   and it's already paid for.
+3. **Never** leave `az postgres flexible-server` HA on at Burstable scale
+   experiments — it silently doubles the DB bill and Burstable doesn't
+   honor it anyway.
+4. Delete ACR tags older than the last 3 — your rollback vocabulary
+   (RUNBOOK 11) never reaches deeper than that.
+5. Re-read this file when tenant #30 signs; the 50-tenant column stops
+   being hypothetical inside a quarter at that pace.
+
+
+---
+
+# APPENDIX B — CALENDAR: calendar time ≠ dev time
+
+Everything from `ARCHITECTURE.md` §6 (plus what Session 4 surfaced) that
+takes **real-world waiting** rather than work. The build is a weekend; these
+are why going live is not. Durations are realistic, not best-case.
+
+## Start on day one — before or alongside RUNBOOK Phase 1
+
+These have long fuses, no dependencies you don't already have, and every
+one of them is on the critical path to *charging a real client*:
+
+| # | Item | Realistic duration | Why it can't wait |
+|---|---|---|---|
+| 1 | **Stripe account + business verification** | 1–7 days; payouts sometimes held longer for new accounts | Phase 9 needs a verified account; the first deposit needs payouts working. Start with whatever entity you have — see #6. |
+| 2 | **Twilio A2P 10DLC brand + campaign registration** | Brand: ~1 day. **Campaign review: 10–15 business days**, longer on rejection-and-resubmit | The SMS confirmation gate (D9) is *outbound* — the regulated part. Registration needs a live website with a privacy policy: the platform's tenant privacy pages exist, but the **company site is Session 5**, so realistically this files right after Session 5's curbsidesites.com is up. Put it at the top of that session's exit checklist. ⚠️ Scope trap (ARCHITECTURE §6): this covers *Curbside texting its clients* — one brand, one campaign. Missed-call text-back for clients is per-client ISV registration: a different, much bigger project. Price and sequence it as one. |
+| 3 | **Domain purchase + nameserver move** | Minutes to 24 h (rarely 48 h) | Phase 6 blocks on it; every DNS-dependent item below chains behind it. |
+| 4 | **Email domain warming** | 2–4 weeks of low, human-looking volume before you can trust bulk deliverability | A brand-new domain's first 50 emails decide its reputation. From the day DNS lands (Phase 8): send real one-to-one mail from `hello@curbsidesites.com`, keep DMARC at `p=none` while watching reports, move to `quarantine` after 2 clean weeks. The monthly-report blast on the 2nd must not be the domain's first impression. |
+| 5 | **MSA + consent-language lawyer review** | 1–2 weeks for a small-business attorney's turnaround | The recording-consent copy (CONTROL-PLANE 2.2) and the suspension/offboarding terms (D20) must be reviewed **before the first real onboarding call is recorded** — Penal Code §632 is criminal, not civil. Cheapest insurance in the business. |
+| 6 | **California LLC + E&O insurance** | LLC: days (online) to ~3 weeks (standard processing); E&O: ~1 week of quotes | Stripe verification (#1), the MSA (#5), and the bank account all want the entity to exist first. This is the true first domino — file it *today*. |
+
+## Per-client waits — the recurring calendar
+
+These reset with **every** client. The pipeline automates the chasing
+(CONTROL-PLANE 2.5); the calendar is still the calendar. Set the client's
+expectation at the 30-minute call: *"site's done in days; live on your
+domain in one to three weeks, mostly waiting on things only you can click."*
+
+| Item | Realistic duration | Notes |
+|---|---|---|
+| Client adds the CNAME + TXT records | **1 day to 2 weeks** — dominated by client responsiveness, not DNS | The single slowest step in the whole funnel. The auto-chase emails every 3 quiet days; a phone call at day 7 beats email #3. |
+| DNS propagation once they act | minutes–24 h | |
+| Custom-hostname TLS cert issuance | minutes–1 h after DNS validates | Automatic (Cloudflare for SaaS). |
+| Per-client sending domain (DKIM records → Resend verify) | rides the same DNS errand as the CNAME | Bundle the records in ONE email — clients do one registrar visit, not two. |
+| **Google Business Profile verification** | days–weeks (postcard: 5–14 days; video: sometimes same-day) | Needed for GBP manager access (D8) and the Curb+ visibility work. Ask for manager access at the 30-min call; start verification the same day if they've never claimed it. |
+| GBP re-instatement (suspended profiles — common after address edits) | 1–4 weeks, appeal-driven | Don't edit NAP on a fragile profile in week one. |
+| Client's first ACH payment clears | 3–5 business days (vs instant cards) | The deposit gate ("paid before build") means: collect deposit at signing, run the build during the clearing window. |
+
+## One-time platform waits already inside the runbook
+
+Small, but they order the weekend:
+
+| Item | Duration | Runbook phase |
+|---|---|---|
+| Azure RBAC role-assignment propagation | up to ~10 min each | 3.1, 4.1, 5.3 — the reason those phases say "wait, don't debug" |
+| Postgres Flexible Server provisioning | 5–10 min | 2.1 |
+| First ACR image build (chromium layer) | ~10 min | 5.1 |
+| Cloudflare ACM certificate issuance | minutes, occasionally hours | 6.3 — order it, then go do Phase 7's export while it validates |
+| Resend domain verification | minutes–hours | 8.1 |
+| Stripe webhook "first event" confidence | immediate in test mode | 9.4 |
+
+## The interleaved plan (what to actually do)
+
+- **Today:** file the LLC (#6), open the Stripe account (#1), buy the domain
+  (#3), email two attorneys for MSA/consent quotes (#5).
+- **The build weekend:** RUNBOOK Phases 1–11 in order. Email warming (#4)
+  starts the moment Phase 8's DNS lands — from then on it runs itself if you
+  send a little real mail.
+- **The week after:** Session 5 (curbsidesites.com + billing UI) → then
+  immediately file Twilio brand + campaign (#2), because its 10–15 day
+  review is the longest fuse left and it needs that site to exist.
+- **First real client:** everything in "per-client waits" starts at the
+  30-minute call — collect the GBP access request, the registrar name, and
+  the deposit in that same call, or each becomes its own week of latency.
+
+The theme, one more time: **AI collapsed delivery; it did not collapse
+carrier reviews, DNS, banks, lawyers, or clients finding their registrar
+password.** Start the fuses first; build while they burn.
+
+
+---
+
+# APPENDIX C — SECRETS: Key Vault manifest
+
+Every secret the tenant app can consume: what it does, where to get it, and
+what breaks without it. Per Invariant 3: secret **values** live in Azure Key
+Vault (production) or `.env.local` as `SECRET_<ref>` (local dev, via the env
+provider). The database stores only the reference **name** on
+`integrations.kv_secret_ref`. No endpoint, log, or error message ever returns
+a value — `/api/status` reports names and a populated/not-populated boolean.
+
+**Naming convention:** `tenant-<slug>-<integration>-key` for per-tenant
+secrets, `curbside-<service>-key` for platform-wide ones. The seed script
+pre-fills `kv_secret_ref` on every integration row, so `/api/status` doubles
+as the "what's missing" checklist.
+
+**Ownership (`key_owner` on the integration row, D8/CONTROL-PLANE §3):**
+`client` = the key lives in the client's own vendor account (portability;
+their billing). `curbside` = platform-level service on our account.
+
+## Per-tenant secrets
+
+| Ref pattern | Owner | What it does | Where to get it | What breaks without it |
+|---|---|---|---|---|
+| `tenant-<slug>-reviews-google-key` | client | Google Places API (v1) key used by the review fetch job. Row config needs `place_id`. | Google Cloud Console → the **client's** project → enable Places API (New) → credentials. Get their Place ID from the GBP listing. | Review fetch job skips Google; site keeps serving cached rows, or demo reviews if none exist. Nothing breaks on-page. |
+| `tenant-<slug>-reviews-yelp-key` | client | Yelp Fusion API key for the review fetch job. Row config needs `business_id`. | biz.yelp.com → Yelp Fusion developer portal. Business ID from the Yelp page URL. | Same graceful degradation as Google reviews. |
+| `tenant-<slug>-instagram-key` | client | Instagram Graph API long-lived access token for the feed fetch job. | Meta developer app + the client's Instagram Business/Creator account; exchange for a long-lived token (60-day, needs rotation — the dashboard's expiry warning covers this in Session 2). | Feed shows branded demo tiles labeled "sample feed". |
+| `tenant-<slug>-payments-key` | client | Reserved for Stripe Connect (D7, deferred). Do not populate in v1. | — | Nothing; payments is a demo callout in v1 by design. |
+
+## Platform secrets (one per environment, shared across tenants)
+
+| Ref | What it does | Where to get it | What breaks without it |
+|---|---|---|---|
+| `tenant-<slug>-email-key` (points at Curbside's Resend key per tenant, or use one `curbside-resend-key` and set the same ref on every row) | Sends lead notifications and portal magic-link emails via Resend. Row config needs `from` (verified sender on the tenant's domain — SPF/DKIM per ARCHITECTURE §6). | resend.com → API keys. Domain verification per client domain in Session 4. | Emails print to the server console (demo sender). Leads still land in the DB and portal; magic-link login is console-only, which is fine in dev and an outage-degradation in prod. |
+| `tenant-<slug>-newsletter-key` | Resend Audiences sync for newsletter signups. Row config needs `audience_id`. | resend.com → Audiences. | Subscribers still write to our table (source of truth); only the ESP sync no-ops. |
+| `tenant-<slug>-change-request-ai-key` (Anthropic) | LLM parsing of portal change requests into typed diffs. | console.anthropic.com → API keys (Curbside's account). | Demo parser handles hours/tagline changes deterministically; everything else escalates to the ops queue. Chat keeps working. |
+| `tenant-<slug>-quote-assistant-key` (Anthropic) | Live AI quote assistant (deferred — live.ts throws by design in v1). | Same Anthropic account. | Widget serves labeled demo ballparks. |
+| — analytics (no secret) | Plausible needs only `config.domain` on the integration row. | plausible.io → add site. | No script tag renders; our own events table records conversions regardless (D14). |
+| — call_tracking (no secret in v1) | DNI number pair in `config.dni_display` / `config.dni_tel`. | Provider (Twilio/CallRail) when the add-on sells. | Pages render the canonical NAP number. JSON-LD/llms.txt always do regardless (Invariant 6). |
+
+## Infrastructure secrets (not integration rows)
+
+| Name | What it does | Where it lives | What breaks without it |
+|---|---|---|---|
+| `DATABASE_URL` | App connection as `curbside_app` (RLS-constrained — never the owner role; db.ts refuses). | Key Vault → Container Apps secret ref (Session 4). Local: `.env.local`. | App doesn't boot. |
+| `DATABASE_URL_OWNER` | Migrations/seeds only. | CI + operator laptop only. Never in the app environment. | Can't migrate; app unaffected. |
+| `STAFF_STATUS_TOKEN` | Bearer token for `/api/status` until real staff auth (Session 2). | Key Vault. Local: `.env.local`. | Status endpoint 401s for everyone. |
+| `APP_DB_PASSWORD` | Password migrate.ts sets on the `curbside_app` role. | Key Vault; defaults to a dev value locally. | Local default works; prod runbook overrides. |
+
+## Operator-side keys (scripts only — never the app process)
+
+| Env var | What it does | Where to get it | What breaks without it |
+|---|---|---|---|
+| `PEXELS_API_KEY` | Preferred stock-photo provider in `scripts/source-images.ts` (Part 10 sourcing workflow). | pexels.com/api — free, instant. | Scripts fall back to keyless Openverse (CC-licensed, noticeably rougher picks — budget more review time). Nothing breaks. |
+| `ANTHROPIC_API_KEY` | The `--ai` flag on the sourcing script (narrative-fit search queries). | console.anthropic.com. | `--ai` unavailable; the script falls back to the manifest's stored queries. |
+
+## Control-plane secrets (Session 2)
+
+| Ref / env var | What it does | Where to get it | What breaks without it |
+|---|---|---|---|
+| `curbside-resend-api-key` (secret ref) | Platform email: intake receipts, registrar instructions, dunning warnings, staff pings (`src/lib/control/notify.ts`). Also referenced above for tenant email. | resend.com → API keys. | Console delivery — every email prints to the server log instead. Pipelines never abort on it. |
+| `curbside-anthropic-api-key` (secret ref) | Content seeding (2.6): claude-opus-4-8 drafts site copy + posts in the owner's voice. | console.anthropic.com. | Deterministic template drafts (still useful, clearly generic). The consent gate applies either way. |
+| `curbside-cloudflare-api-token` (secret ref) | Cloudflare for SaaS Custom Hostnames API (create/poll/delete client domains, D15). Needs `CLOUDFLARE_ZONE_ID` env alongside. | Cloudflare dash → API tokens → zone-scoped, Custom Hostnames edit (Session 4 runbook). | Demo hostname provider: simulated verification after a ~90s soak. Setting the zone id WITHOUT the token throws loudly (D11 half-configured). |
+| `curbside-stripe-webhook-secret` (secret ref) | Verifies `stripe-signature` on `/api/stripe/webhook`. | Stripe dashboard → webhook endpoint → signing secret (Session 4). | Webhook falls to the DEMO provider, which only accepts simulated events (`npm run stripe:simulate`). Real Stripe events are rejected until this is populated. |
+| `DATABASE_URL_CONTROL` (env) | Control-plane pool as `curbside_control` — staff surface, intake pipeline, jobs, webhooks. control/db.ts refuses any other role. | migrate.ts creates the role; password via `CONTROL_DB_PASSWORD`. | Admin, intake, jobs, and webhooks all fail to boot their queries. Tenant sites unaffected. |
+| `STAFF_TOTP_ENC_KEY` (env) | AES-256-GCM key encrypting staff TOTP secrets at rest. | Any long random string locally; Key Vault in production (Session 4). | Dev fallback key with a console warning locally; production mode refuses (Invariant 3). Changing it orphans existing enrollments — staff re-enroll. |
+| `CRON_TOKEN` (env) | Bearer auth for `POST /api/jobs/run` (the scheduled-jobs trigger). | Any long random string. | `npm run jobs` 401s; the dashboard's "Run checks now" (staff session) still works. |
+| `STAFF_ADMIN_PASSWORD` (env, seed-time only) | Password for the first staff user created by `npm run db:seed:fleet`. | Choose one; if unset the seed prints a generated one ONCE. | Nothing at runtime — it's only read by the seed. |
+| `STRIPE_PRICE_MAP` (env, not secret) | JSON map of real Stripe price ids → plan tier / feature flag / MRR (D19). | Stripe dashboard product prices (Session 4). | Demo price ids (`price_curb`, `price_addon_crm`, …) apply — correct locally, wrong against a real Stripe account. |
+
+## Session 4 — production wiring
+
+The Key Vault provider is live (`src/lib/secrets.ts`): set
+`SECRET_PROVIDER=keyvault` + `AZURE_KEY_VAULT_NAME`, authenticated by
+DefaultAzureCredential (managed identity on Container Apps, `az login` on a
+laptop). Values are cached ~5 minutes, so rotation lands within that window
+with no deploy. RUNBOOK.md Phase 3 provisions the vault; Phase 5.6 proves
+the app reads a secret and that no endpoint returns a value.
+
+Infrastructure secrets now held IN Key Vault and surfaced to the app as
+Container Apps secret-references (never plain env values):
+
+| KV name | Feeds env var |
+|---|---|
+| `curbside-app-database-url` | `DATABASE_URL` |
+| `curbside-control-database-url` | `DATABASE_URL_CONTROL` |
+| `staff-status-token` | `STAFF_STATUS_TOKEN` |
+| `staff-totp-enc-key` | `STAFF_TOTP_ENC_KEY` |
+| `cron-token` | `CRON_TOKEN` (also injected into the tick job) |
+
+One deliberate duplicate: the edge Worker (`infra/cloudflare/`) holds its
+own copy of the Resend key (`wrangler secret put RESEND_API_KEY`) for
+failover alert emails — the Worker must be able to alert precisely when
+the app (and its Key Vault access) is the thing that's down. Rotating the
+Resend key means rotating it in **both** places.
+
+## Rotation
+
+Rotate by writing the new value to the same ref (Key Vault versioning keeps
+history), no deploy needed — adapters resolve at call time. Instagram tokens
+expire in ~60 days and are the first thing that will bite.
+
+**Rotation policy lives on the integration row** (Session 2, CONTROL-PLANE §3):
+set `secret_expires_at` (and optionally `rotation_days`) via the tenant page in
+the admin, and the secret-expiry job raises a dashboard alert 30 days out —
+warn BEFORE the key dies, not after. `key_owner` on the same row records whose
+account the key belongs to (D8: prefer client-owned wherever the vendor allows).

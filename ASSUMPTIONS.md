@@ -1,8 +1,13 @@
-# ASSUMPTIONS.md — Sessions 1, 2, 3 & 4
+# ASSUMPTIONS.md — every call made without asking, numbered, dispositioned
 
 Session 1 (tenant app) is #1–32; Session 2 (control plane) is #33–52;
 Session 3 (growth plane) is #53–70; Session 4 (the runbook + production
-seams) starts at #71.
+seams) is #71–82; Sessions 5–8 (production go-live, recorded retroactively)
+are #83–90. Numbers are permanent — never renumbered, never reused.
+**Every entry has a disposition** (promoted / refuted / carried) as of the
+2026-08-04 architecture review — see the Dispositions section at the end.
+New entries get a disposition at the end of the session that logs them;
+nothing crosses a handoff as pending.
 
 # Session 1 (tenant app)
 
@@ -408,7 +413,7 @@ Every decision made without asking, per the build prompt. Where D3 said
 
 # Session 4 (the runbook + production seams)
 
-Session 4's deliverables are `RUNBOOK.md`, `COSTS.md`, and `CALENDAR.md`.
+Session 4's deliverables are `RUNBOOK.md`, `RUNBOOK.md Appendix A`, and `RUNBOOK.md Appendix B`.
 It also wired the code seams earlier sessions explicitly deferred to it
 (Key Vault provider, Azure Blob uploads, failover upload/serving, the
 Docker image) — a runbook step that says "now paste 60 lines of TypeScript"
@@ -424,7 +429,7 @@ is not an executable instruction set.
 72. **Database network model v1: public access + firewall** (operator IP +
     the allow-azure-services rule), TLS required, NOBYPASSRLS roles with
     strong passwords. VNet integration is deliberately deferred to the
-    Burstable→General-Purpose move (~50 tenants, COSTS.md) — a solo
+    Burstable→General-Purpose move (~50 tenants, RUNBOOK.md Appendix A) — a solo
     operator gets a debuggable database now; the upgrade path is written
     down where the money is.
 73. **The edge is one Cloudflare Worker on route `*/*`** (repo:
@@ -487,4 +492,85 @@ is not an executable instruction set.
     excluded from the host proxy so it answers on the bare FQDN.
 82. **Runbook commands are PowerShell** — this project's operator is on
     Windows; a bash runbook would be translated live at the worst moment.
-    Cost figures in COSTS.md are July-2026 list prices ±20%.
+    Cost figures in RUNBOOK.md Appendix A are July-2026 list prices ±20%.
+
+---
+
+# Sessions 5–8 (production go-live) — recorded retroactively, 2026-08-04
+
+These calls were made during the go-live sessions and lived only in RUNBOOK
+as-built notes, ONBOARDING.md prose, and code comments until the 2026-08-04
+architecture review reconstructed them. Same rules as #1–82.
+
+83. **Postgres 18, local and production** (supersedes the postgres:16 half of
+    #5). Blast radius if wrong: none observed — but the PG18 Docker image
+    changed its data-volume path, which silently resets the local DB on
+    upgrade (RUNBOOK as-built note, `ccb6067`).
+84. **The operator environment is macOS + zsh** — this REVERSES #82
+    (PowerShell/Windows). Runbook commands and `~/.curbside-env-01` sourcing
+    are zsh; scripts that source it die under bash (exit 127 at `source`).
+85. **Blob storage is Standard_RAGRS, not the LRS the costs table priced**
+    (~$10–15/mo above the Appendix A line). Chosen for geo-redundant reads on
+    failover snapshots.
+86. **`--max-replicas 1`** on the Container App (costs/specs assumed up to 3).
+    Consequences: the in-memory rate limiter (#17) is currently coherent, and
+    a replica-scale event is a deliberate act, not an autoscaler surprise.
+87. **The edge Worker passes `/.well-known/acme-challenge/` straight through**
+    as its first check. Without this, NO custom hostname using HTTP validation
+    can ever go live behind the `*/*` route — Cloudflare's DV token gets
+    proxied to Azure and validation hangs at `pending_validation` (found the
+    hard way on dubdating.com; `infra/cloudflare/worker.js`).
+88. **The Worker treats origin 404s on GET as failover-suspect** in addition
+    to 5xx/unreachable (worker.js) — a dead tenant resolver looks like a 404,
+    not a 500.
+89. **Host policy (redirect + canonical hosts) lives in `wrangler.toml` vars**
+    (`REDIRECT_HOSTS`, `CANONICAL_HOST`), not Cloudflare dashboard rules —
+    one reviewable list instead of two systems. `www.curbsidesites.com`
+    404ed until this existed.
+90. **The first client's apex was swapped for `www`** (releaseDomains +
+    re-provision) because a zone-apex CNAME is impossible on GoDaddy —
+    promoted into D22, and the swap exposed the `is_primary` bug now queued
+    in the hardening session.
+
+---
+
+# Dispositions — 2026-08-04 architecture review
+
+Every entry above now carries one of: **promoted** (held; lives in the named
+decision/spec/doc), **refuted** (wrong; the affected decision reopened), or
+**carried** (still unresolved; named owner + re-check trigger). Entries not
+listed individually below are **promoted** — they held, and their durable home
+is the amended `ARCHITECTURE.md` (D1–D28), `SPECS.md`, `RUNBOOK.md` +
+appendices, or `README.md` conventions, where each is already reflected.
+
+**Refuted (2):**
+
+| # | What the build revealed |
+|---|---|
+| 31 | "Demo tenants must never show bare placeholders" — the running dev DB has **0 of 10** image URLs populated on both demo tenants, and the production fixture renders 8 placeholders. The D11 "screenshot-ready" bar has never held off the machine that ran the CLI. Reopened as the intake-image-sourcing item in `02-BUILD-PROMPT.md` Session 1. |
+| 82 | "Runbook commands are PowerShell; the operator is on Windows" — reversed by #84 (macOS/zsh) during the go-live sessions. |
+
+**Carried (14 entries, 13 rows — #8 and #38 share a fate):**
+
+| # | Owner | Re-check trigger |
+|---|---|---|
+| 8/38 | 02 Session 1 | Draft preview-token gating is breached by the draft-content leak; re-check when the leak fix lands (the mechanism stands, its guarantee doesn't). |
+| 12 | 02 Session 1 | `/api/status` still guards with a static bearer token; fold into staff auth or renew the decision. |
+| 17 | Jason | First scale past 1 replica (per #86 that is a deliberate act) — in-memory rate limiting becomes per-replica then. |
+| 24 | 02 backlog | Customer portal shell still unbuilt; revisit when a client asks for job status. |
+| 25 | 02 Session E | Quote assistant live mode waits on a per-tenant price book. |
+| 26 | 02 Session D | Theme editor; primitives unchanged. |
+| 45 | 02 Session 1 | Suspended-tenant RSC flight still serializes the public child page; re-check if anything non-public ever renders through that path. |
+| 53 | Jason | "All clients are California" narrowed to "the ICP is" (D21 kept dub-dates out of it); re-check at the first signed client outside CA/LA-time. |
+| 64 | Jason | SERP vendor still unpicked; decide when the first Curb+ sells. |
+| 65 | 02 Session E | GBP OAuth plumbing needs a real client's manager grant to test against. |
+| 72 | Jason | DB public-access+firewall model; re-decide at the Burstable→GP move (RUNBOOK Appendix A called the shot). |
+| 75 | Jason | Public-read blob containers; re-check if clients ever upload anything sensitive. |
+| 77 | Jason | Sentry (D3) still unwired; interim alerting named in the D3 table. Re-check at 02 Session 1. |
+
+**Promoted highlights** (the rest are promoted without individual notes):
+#1/#2 → the D3 table now names Resend and Plausible in place. #40 + #90 →
+D22. #73's "never set `TRUST_PROXY_HOST` without a proxy that overwrites the
+header" → hardened into D23's invariant. #44's "nothing automated ever
+suspends" → flagged in 02 Session 1 to become a tested invariant on D7.
+#87 (ACME passthrough) → RUNBOOK Phase 6 + worker.js comments.
