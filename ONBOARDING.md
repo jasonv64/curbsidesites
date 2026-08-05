@@ -150,7 +150,27 @@ The brand gate must pass before a tenant can go live. Content drafts also land
 read them — mandatory for trades content, where a confidently wrong spec is a
 safety problem, not an SEO problem.
 
-### 4. Connect the domain — **UNPROVEN below this line**
+### 4. Connect the domain — **PROVEN through hostname creation (2026-07-19)**
+
+> Run against dubdating.com: `provisionDomain()` selected the live Cloudflare
+> provider, created a real custom hostname (`pending_validation`, http DV),
+> upserted the `domains` row to `pending`, and rendered GoDaddy instructions.
+> What is still unproven is *verification* — the cert issuing after DNS is live
+> — because that waits on the client's registrar + propagation.
+>
+> ⚠️ **APEX-CNAME LIMITATION — the generated instructions are wrong for an apex
+> domain on GoDaddy.** `provisionDomain` emits `CNAME <apex> → sites-origin…`,
+> but a CNAME cannot exist at a zone apex (RFC 1034) and GoDaddy has no CNAME
+> flattening. So a client who wants `theirshop.com` (not `www.theirshop.com`)
+> on GoDaddy cannot follow the instructions as written. Real options for an
+> apex on a registrar without flattening:
+>   - **Use `www.` as the custom hostname** (CNAME works for subdomains) and set
+>     GoDaddy apex **Domain Forwarding** `theirshop.com → www.theirshop.com`.
+>   - **Delegate the domain's nameservers to Cloudflare**, which flattens apex
+>     CNAMEs — but then the client's DNS lives at Cloudflare, not their
+>     registrar, which is a different arrangement than "keep your domain."
+> The instruction generator should branch on apex-vs-subdomain and on whether
+> the registrar supports flattening (Cloudflare/Namecheap yes, GoDaddy no).
 
 `provisionDomain(tenantId, hostname, actor)`:
 
@@ -171,11 +191,24 @@ code, not someone's memory.
 > Requires Resend (RUNBOOK Phase 8). Until then the instruction email has
 > nowhere to go — send the records by hand.
 
-### 5. Go live
+### 5. Go live — **PROVEN (2026-07-19): www.dubdating.com is live end to end**
 
 `maybeGoLive()` flips `draft → live` only when **the brand gate has passed AND
 a domain has verified**, unless staff explicitly force it. Both conditions, or
-it stays a draft.
+it stays a draft. Verified on dub-dates: brand proposal approved (2.3 gate) +
+`www.dubdating.com` verified → live, serving over its own TLS cert
+(`CN=www.dubdating.com`), apex 301-forwarding to www.
+
+> ⚠️ **The `*/*` Worker ate the ACME HTTP-01 challenge — fixed in the Worker,
+> essential for every future client.** Cloudflare validates a custom hostname
+> by serving a token at `http://<host>/.well-known/acme-challenge/…`. The
+> zone-wide Worker intercepted that path and proxied it to Azure, so DV was
+> stuck at `pending_validation` and returned Cloudflare `error 1001`. Fix:
+> `worker.js` now passes `/.well-known/acme-challenge/` straight through
+> (`return fetch(request)`) as the very first check. Without it, **no custom
+> hostname using HTTP validation can ever go live behind this Worker.** (An
+> alternative is TXT validation — `method: "txt"` in the CF adapter — which
+> needs no Worker cooperation but adds a DNS record for the client.)
 
 ### 6. Verify — the checks that actually mean something
 

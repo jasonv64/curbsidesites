@@ -1032,10 +1032,26 @@ scheduled jobs listed with a successful execution each.
 3. Add each record in Cloudflare DNS (dash → DNS). **DNS-only (grey cloud)**
    for these — email auth records must not be proxied.
 
-   ⚠️ **SPF: merge, never add a second record.** A domain may have exactly one
-   SPF TXT record. Two is a `permerror` and **both** fail — which shows up as
-   `SPF: FAIL` on the 8.3 test with no obvious cause. `curbsidesites.com`
-   already carries Microsoft 365's SPF, so the single record becomes:
+   > **AS BUILT (2026-07-19): Resend puts everything on the `send.` subdomain,
+   > so the SPF-merge warning below did NOT apply — no merge was needed.** The
+   > three records Resend generated were: TXT `resend._domainkey` (DKIM key),
+   > MX `send` (bounce handling → an SES `feedback-smtp.*.amazonses.com` host),
+   > and TXT `send` = `v=spf1 include:amazonses.com ~all`. Because the SPF lives
+   > on `send.curbsidesites.com` — a different name than the apex — it does not
+   > collide with the Microsoft 365 apex SPF and is added as its own record.
+   > Also: these are token-less DNS adds now — the broad setup token was revoked
+   > after Phase 6, and the narrow SSL-scoped token can't write DNS, so do these
+   > in the Cloudflare dashboard by hand. TXT/MX can't be proxied anyway.
+   >
+   > The merge rule below still holds **only if** a given Resend account instead
+   > emits an apex `v=spf1` include (some do). Check the NAME on each SPF record:
+   > merge only when two would share the same name.
+
+   ⚠️ **SPF: merge, never add a second record ON THE SAME NAME.** A name may have
+   exactly one SPF TXT record. Two is a `permerror` and **both** fail — which
+   shows up as `SPF: FAIL` on the 8.3 test with no obvious cause. If Resend ever
+   asks for an apex include, `curbsidesites.com` already carries Microsoft 365's
+   SPF, so the single apex record becomes:
 
    ```
    v=spf1 include:spf.protection.outlook.com include:<resend's include> -all
@@ -1077,6 +1093,19 @@ cd infra/cloudflare; npx wrangler@latest secret put RESEND_API_KEY; cd ../..
 ```
 
 ### 8.3 [YOU] The *delivered* test — delivered, not sent
+
+> **AS BUILT (2026-07-31): PASSED.** A message from `hello@curbsidesites.com`
+> reached a Gmail inbox with `dkim=pass header.i=@curbsidesites.com header.s=resend`,
+> `spf=pass smtp.mailfrom=…@send.curbsidesites.com`, and
+> `dmarc=pass header.from=curbsidesites.com`. The aligned DKIM signature
+> (`d=curbsidesites.com`, selector `resend`) is what carries DMARC. **Gotcha
+> that cost a retest:** the FIRST attempt showed all-three-fail because it was
+> sent seconds before the DKIM TXT propagated to Gmail's resolver — the records
+> were already correct. If a fresh domain fails auth, confirm the DKIM record
+> resolves on a public resolver (`dig +short TXT resend._domainkey.<domain>`)
+> *before* concluding anything is misconfigured; give it a few minutes and
+> resend. Do NOT test deliverability by sending to a mailbox on the SAME domain
+> (e.g. M365) — self-domain-from-external-relay reports misleading failures.
 
 Wait ~5 min (KV cache), then submit the intake form at
 `https://sites.curbsidesites.com/onboard` with a **fake test business** and
@@ -1379,6 +1408,19 @@ Friday; the recovery path cannot require a laptop (ARCHITECTURE §5).
 
 1. Install the **Azure mobile app**, sign in, confirm you can reach
    Cloud Shell (hamburger → Cloud Shell).
+
+   > **AS BUILT (2026-08): Cloud Shell won't open until it has a storage
+   > account** — the first launch demands one and the phone UI may not offer to
+   > auto-create it. Provision one ahead of time so the emergency isn't the
+   > moment you discover this: `az group create -n cloud-shell-storage-westus
+   > -l westus`, then `az storage account create -n <unique> -g
+   > cloud-shell-storage-westus -l westus --sku Standard_LRS --kind StorageV2`,
+   > then a `cloudshell` file share on it. In Cloud Shell's mount dialog pick
+   > "Show advanced settings" and select it. Cloud Shell storage is tied to the
+   > **account, not the device**, so mounting once from any browser
+   > (portal.azure.com → `>_`) makes the phone work too. Also verified this
+   > drill after an `az login` token expiry — a password reset silently
+   > invalidates the CLI grant (AADSTS50173); `az login` fixes it.
 2. Deploy a new revision from the laptop (any trivial change, or reuse the
    same image with a new tag — 11.1).
 3. **On the phone**, Cloud Shell:

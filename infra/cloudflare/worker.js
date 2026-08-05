@@ -40,6 +40,18 @@ export default {
     const url = new URL(request.url);
     const visitorHost = url.hostname;
 
+    // Let Cloudflare answer ACME HTTP-01 challenges for pending Cloudflare-for-
+    // SaaS custom hostnames. This */* Worker otherwise intercepts the challenge
+    // path and proxies it to ORIGIN_HOST, so the token never gets served and DV
+    // validation is stuck at pending_validation forever (found onboarding
+    // www.dubdating.com, 2026-07-19). fetch(request) hands the request back to
+    // the edge, which serves the validation response. Must be the FIRST thing
+    // checked — before redirects, before origin — for EVERY host, since any
+    // client custom hostname can be mid-validation.
+    if (url.pathname.startsWith("/.well-known/acme-challenge/")) {
+      return fetch(request);
+    }
+
     // Non-site hosts (www, and anything else added to REDIRECT_HOSTS) fold
     // into the canonical marketing host before any origin work. 301, because
     // this mapping is permanent and one canonical host is what search engines
