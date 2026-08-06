@@ -71,6 +71,9 @@ jobs:
       - name: Domain instructions + primary-domain invariants (D22)
         run: npm run test:domains
 
+      - name: Nothing automated ever suspends (D7 / ASSUMPTIONS #44)
+        run: npm run test:suspend-gate
+
       - name: Footer credit targets return 200 in production (Invariant 11)
         run: npm run test:credits
 

@@ -1,8 +1,10 @@
 /**
- * Request proxy (Next 16's middleware). One job: fold the Host header into
- * the route tree, so every page under src/app/s/[host]/ renders for exactly
- * one hostname. No database access here — resolution, status gating, and
- * 404s happen in the tenant layout, where they can be cached per tenant.
+ * Request proxy (Next 16's middleware). Folds the Host header into the route
+ * tree, so every page under src/app/s/[host]/ renders for exactly one
+ * hostname — and runs the two gates that must fire BEFORE anything renders:
+ * the D23 edge-secret check and the draft/unknown-host visibility gate (one
+ * indexed DB read via tenant-gate.ts; the full bundle load and caching stay
+ * in the tenant layout).
  *
  *   GET https://ironridgeoffroad.com/services
  *     → rewrite → /s/ironridgeoffroad.com/services

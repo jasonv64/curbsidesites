@@ -64,14 +64,19 @@ Then browse — all of these are the same running server:
 
 Custom-domain routing is testable without DNS: `curl -H "Host: ironridgeoffroad.test" http://127.0.0.1:3000/`.
 
-Full verification (build + RLS gate + smoke + axe + control-plane e2e): `npm run verify`.
+Full verification (build + RLS gate + growth/boundary/domains/suspend-gate/credits vitest suites + smoke + axe + control-plane e2e): `npm run verify`.
 
 ---
 
 ## How tenancy works (read this once)
 
 ```
-request → src/proxy.ts (rewrites Host into the path: /s/<host>/<path>)
+request → src/proxy.ts
+            1. D23 gate (production): no edge shared secret → 403
+            2. visibility gate (src/lib/tenant-gate.ts, one indexed read):
+               unknown host, or draft without the preview cookie → 404
+               BEFORE anything renders (drafts must never stream content)
+            3. rewrites Host into the path: /s/<host>/<path>
         → src/app/s/[host]/layout.tsx
             → getTenantBundle(host)            src/lib/tenant.ts
                 → resolveHost(host)            fresh every request:
@@ -293,12 +298,14 @@ the next generation on. That's a feature.
 
 ```
 migrations/            forward-only SQL; 001 tenant app, 002-004 control plane,
-                       005 growth plane (reports, schedule, quotas, terms, NAP, asks)
+                       005 growth plane (reports, schedule, quotas, terms, NAP, asks),
+                       006 one-primary-domain-per-tenant (partial unique index)
 scripts/               migrate, seed, seed-fleet, seed-growth, generate-report,
                        run-jobs, simulate-stripe, export-static (D6),
                        fetch-reviews, fetch-instagram, source-images
 src/
-  proxy.ts             Host → /s/<host>/ rewrite + admin./apex control hosts
+  proxy.ts             D23 edge gate + draft/unknown-host gate + Host →
+                       /s/<host>/ rewrite + admin./apex control hosts
   lib/
     control/         ★ THE CONTROL PLANE — db (control pool), staff-auth, totp,
                        intake-schema, onboarding, brand-proposal, domains,
@@ -309,7 +316,9 @@ src/
                        (dispatcher), reviews-job, rank-tracking, nap-drift,
                        solicitation, content-calendar
     db.ts              withTenant / platformQuery — THE ONLY app-pool access
-    tenant.ts        ★ host resolution + cached tenant bundle + tenantTag
+    tenant-gate.ts     host → tenant-row resolution + the proxy's visibility
+                       gate (no react/next-cache imports, so proxy.ts can use it)
+    tenant.ts        ★ re-exports resolution + cached tenant bundle + tenantTag
     schemas.ts       ★ every Zod schema and row type (single source of shape)
     section-registry.tsx ★ name → component + props schema; DEFAULT_SECTIONS
     brand.ts           token validation, contrast math, injected <style>
@@ -388,7 +397,16 @@ somewhere, that somewhere has a hardcode and it's a bug.
 or any allowed remote). Same slot id = zero code edits. NULL url = branded
 placeholder again.
 
-**Source stock images for a demo site (Part 10 workflow):**
+**Image sourcing is automatic at intake (Session 1, D11):** every tenant
+created through the intake form kicks off `sourceForIntake` in the
+background — auto-applies the top candidate per slot through the blob seam
+(Azure Blob in production, `.data/uploads` locally) with `url` and `credit`
+written together, and raises a `source_images` item in the staff queue for
+any slot that stays on a placeholder. Core lives in
+`src/lib/control/image-sourcing.ts` (control role); the CLI below drives
+the same module for re-runs, reviews, and swaps.
+
+**Source stock images manually (Part 10 workflow):**
 ```bash
 npm run images:source <slug> -- --ai     # Claude tunes queries to the tenant's narrative, provider fetches candidates
 # → open .data/image-candidates/<slug>/review.html and LOOK at every image
@@ -521,10 +539,11 @@ it reads the DB directly.
 - **One transaction = one client = sequential queries.** `Promise.all` over
   the same `db` handle triggers pg's deprecated query-queuing. Parallelize
   across `withTenant` calls, not within one.
-- **Windows orphan processes:** stopping the npm wrapper can leave the node
-  child serving a **stale build** on :3000 and your next verification pass
-  lies to you. Before re-verifying: `Get-NetTCPConnection -LocalPort 3000`
-  and kill the owning PID.
+- **Orphan processes serve stale builds:** stopping the npm wrapper can leave
+  the node child serving a **stale build** on :3000 and your next
+  verification pass lies to you (this bit the Session 1 leak verification).
+  Before re-verifying — macOS/Linux: `lsof -nP -iTCP:3000 -sTCP:LISTEN`;
+  Windows: `Get-NetTCPConnection -LocalPort 3000` — and kill the owning PID.
 - **Windows native binaries don't auto-install** (npm optional-deps bug):
   lightningcss, Tailwind oxide, rolldown, and **sharp** (`@img/sharp-win32-x64`,
   needed by the image optimizer — without it every `/_next/image` request
@@ -540,9 +559,12 @@ it reads the DB directly.
 - **Blob CORS:** `next/image` fetches blob URLs server-side (no CORS), but
   any client-side fetch of blob assets needs the storage account's CORS
   rules; RUNBOOK.md Phase 4.2 sets them.
-- **`TRUST_PROXY_HOST=1` means "believe X-Forwarded-Host".** In production
-  the edge Worker overwrites that header on every request, so it's safe —
-  and REQUIRED, because ACA ingress only routes its own FQDN, so the real
+- **`TRUST_PROXY_HOST=1` means "believe X-Forwarded-Host" — and since
+  Session 1 it requires `EDGE_SHARED_SECRET` (D23)**: the proxy throws
+  without it, and 403s any request that doesn't carry the edge Worker's
+  `X-Curbside-Edge` header. In production
+  the edge Worker overwrites the forwarded-host header on every request,
+  and it's REQUIRED, because ACA ingress only routes its own FQDN, so the real
   hostname can't arrive as `Host`. Never set the flag on a server clients
   can reach without such a proxy: it would let anyone impersonate any
   tenant's hostname with one curl header.
@@ -575,13 +597,18 @@ it reads the DB directly.
 ## Tests
 
 ```
-npm run test:rls    # D4 isolation gate — vitest, real DB, app role, both attack paths
-npm run test:growth # scheduler stagger/quota/backoff math, LA month boundaries,
-                    # report honesty rules, the NAP/DNI invariant (Inv. 6), and a
-                    # real-DB quota-failure-mid-batch degradation test (Part 10.4)
-npm run test:e2e    # Playwright vs production server: smoke (18), lifecycle (4),
-                    # axe (23 — includes the report artifact), control-plane (4)
-npm run verify      # build + all three suites
+npm run test:rls          # D4 isolation gate — vitest, real DB, app role, both attack paths
+npm run test:growth       # scheduler stagger/quota/backoff math, LA month boundaries,
+                          # report honesty rules, the NAP/DNI invariant (Inv. 6), and a
+                          # real-DB quota-failure-mid-batch degradation test (Part 10.4)
+npm run test:boundary     # D23 trust boundary: forged X-Forwarded-Host → 403 at the origin
+npm run test:domains      # D22 instruction branches, apex refusal, one-primary constraint
+npm run test:suspend-gate # D7 / #44: nothing automated ever suspends; only the staff click
+npm run test:credits      # Invariant 11: all five footer-credit targets 200 in production
+npm run test:e2e          # Playwright vs production server: smoke (18), lifecycle (5 — incl.
+                          # the draft-leak tripwire + the D21 noindex flag), axe (23 —
+                          # includes the report artifact), control-plane (4)
+npm run verify            # build + every suite above
 ```
 
 CI (`.github/workflows/ci.yml`) refuses to pass without

@@ -25,8 +25,9 @@
     "test:boundary": "vitest run tests/trust-boundary.test.ts",
     "test:domains": "vitest run tests/domains.test.ts",
     "test:credits": "vitest run tests/footer-credits.test.ts",
+    "test:suspend-gate": "vitest run tests/no-auto-suspend.test.ts",
     "test:e2e": "playwright test",
-    "verify": "npm run build && npm run test:rls && npm run test:growth && npm run test:boundary && npm run test:domains && npm run test:credits && npm run test:e2e"
+    "verify": "npm run build && npm run test:rls && npm run test:growth && npm run test:boundary && npm run test:domains && npm run test:suspend-gate && npm run test:credits && npm run test:e2e"
   },
   "dependencies": {
     "@azure/identity": "^4.13.0",
