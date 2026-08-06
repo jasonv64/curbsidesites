@@ -12,6 +12,7 @@
  * browsable at its platform subdomain via its preview token (2.5).
  */
 import { controlTx, audit } from "@/lib/control/db";
+import { sourceForIntake } from "@/lib/control/image-sourcing";
 import { proposeBrand, type BrandProposal } from "@/lib/control/brand-proposal";
 import {
   INDUSTRIES,
@@ -275,6 +276,14 @@ export async function createTenantFromIntake(
     message: `New intake: ${input.business_name} (${result.slug}) — brand gate pending`,
     detail: { slug: result.slug, call_at: result.callAt.toISOString() },
   });
+
+  // D11: a tenant is never CREATED without image sourcing — it kicks off
+  // here, unconditionally, for every caller of this function. Deliberately
+  // not awaited: the preview link must be in the prospect's hands now
+  // (2.5), and placeholders are the honest loading state while ~10 slots
+  // download. sourceForIntake never throws; a slot that stays empty raises
+  // a pending_actions queue item instead of failing silently.
+  void sourceForIntake(result.tenantId, result.slug);
 
   return { ...result, proposal };
 }

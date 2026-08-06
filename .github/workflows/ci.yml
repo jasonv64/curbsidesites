@@ -32,6 +32,9 @@ jobs:
       STAFF_STATUS_TOKEN: ci-status-token
       ALLOW_ENV_SECRETS: "1"
       UPLOAD_DIR: .data/uploads
+      # Intake now auto-sources images (D11) — CI must not hammer Openverse.
+      # The skip still records the honest pending_actions queue item.
+      SKIP_IMAGE_SOURCING: "1"
 
     steps:
       - uses: actions/checkout@v4

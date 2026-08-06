@@ -78,6 +78,35 @@ export async function saveUpload(
   return { publicPath: `/uploads/${tenantSlug}/${name}` };
 }
 
+/**
+ * Store a slot-named tenant image (image sourcing, Part 10). Unlike uploads,
+ * the name is deliberately stable (`hero.jpg`) so a client's own photo can
+ * replace it later with zero code edits — which also means the blob is
+ * OVERWRITTEN on swap, so it must not be cached as immutable.
+ */
+export async function saveSlotImage(
+  tenantSlug: string,
+  filename: string,
+  body: Buffer
+): Promise<string> {
+  if (azureConfigured()) {
+    const container = await azureContainer();
+    const blob = container.getBlockBlobClient(`${tenantSlug}/${filename}`);
+    await blob.uploadData(body, {
+      blobHTTPHeaders: {
+        blobContentType: "image/jpeg",
+        // Slot-named (not content-addressed): cache briefly, never immutable.
+        blobCacheControl: "public, max-age=3600",
+      },
+    });
+    return blob.url;
+  }
+  const dir = join(uploadRoot(), tenantSlug);
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, filename), body);
+  return `/uploads/${tenantSlug}/${filename}`;
+}
+
 /** Read back for the serving route. Path-traversal-safe. */
 export async function readUpload(
   tenantSlug: string,
