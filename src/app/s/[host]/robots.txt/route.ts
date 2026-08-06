@@ -1,4 +1,4 @@
-import { getTenantBundle, canonicalOrigin } from "@/lib/tenant";
+import { getTenantBundle, canonicalOrigin, tenantNoindex } from "@/lib/tenant";
 
 /** Per-tenant robots.txt: allow all, disallow /portal and /api, sitemap link. */
 export async function GET(_req: Request, ctx: RouteContext<"/s/[host]/robots.txt">) {
@@ -8,9 +8,10 @@ export async function GET(_req: Request, ctx: RouteContext<"/s/[host]/robots.txt
   if (!bundle) return new Response("Not found", { status: 404 });
   const origin = canonicalOrigin(bundle, bundle.hostKind, rawHost);
 
-  // Non-live states and platform subdomains: keep crawlers out entirely.
+  // Non-live states, platform subdomains, and noindex-flagged fixtures
+  // (D21): keep crawlers out entirely.
   const body =
-    bundle.tenant.status !== "live" || bundle.hostKind === "platform"
+    tenantNoindex(bundle.tenant, bundle.hostKind)
       ? `User-agent: *\nDisallow: /\n`
       : `User-agent: *\nAllow: /\nDisallow: /portal\nDisallow: /api/\n\nSitemap: ${origin}/sitemap.xml\n`;
 

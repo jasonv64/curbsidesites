@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
-import { getTenantBundle, canonicalOrigin } from "@/lib/tenant";
+import { getTenantBundle, canonicalOrigin, tenantNoindex } from "@/lib/tenant";
 import { brandStyle, resolveTokens } from "@/lib/brand";
 import { getDisplayNumber } from "@/lib/adapters/call-tracking";
 import { getAnalytics } from "@/lib/adapters/analytics";
@@ -39,8 +39,9 @@ export async function generateMetadata({
 
   const origin = canonicalOrigin(bundle, bundle.hostKind, decodeURIComponent(host));
   // Platform subdomains are a sales/preview surface — never indexed, so the
-  // custom domain is the only canonical copy in search.
-  const noindex = bundle.tenant.status !== "live" || bundle.hostKind === "platform";
+  // custom domain is the only canonical copy in search. The `noindex`
+  // feature flag covers fixtures (D21).
+  const noindex = tenantNoindex(bundle.tenant, bundle.hostKind);
   return {
     metadataBase: new URL(origin),
     title: {

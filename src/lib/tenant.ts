@@ -99,6 +99,18 @@ export const getTenantBundle = cache(async (rawHost: string): Promise<ResolvedBu
   return { ...(await cached()), tenant, hostKind };
 });
 
+/**
+ * Should this render be kept out of search indexes? True for anything not
+ * live, for every platform subdomain (the sales/preview surface — the custom
+ * domain is the only indexable copy), and for tenants carrying the `noindex`
+ * feature flag — the D17-shaped switch D21 uses to keep the dub-dates
+ * fixture (live, real domain, fabricated NAP) out of Google without
+ * special-casing it in core.
+ */
+export function tenantNoindex(tenant: TenantRow, hostKind: HostKind): boolean {
+  return tenant.status !== "live" || hostKind === "platform" || tenant.features?.noindex === true;
+}
+
 /** Canonical public origin for a tenant (used by sitemap/robots/OG/RSS). */
 export function canonicalOrigin(bundle: TenantBundle, hostKind: HostKind, rawHost: string): string {
   const host = normalizeHost(rawHost);

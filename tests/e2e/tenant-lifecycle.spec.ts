@@ -107,6 +107,37 @@ test("suspended tenant serves the under-construction page on every path (D20)", 
   }
 });
 
+test("noindex feature flag keeps a live custom-domain tenant out of indexes (D21)", async ({ request }) => {
+  await ownerDb(async (db) => {
+    await db.query("UPDATE tenants SET status = 'live' WHERE slug = $1", [SLUG]);
+    await db.query(
+      `INSERT INTO domains (tenant_id, hostname, is_primary, verification_status, verified_at)
+       SELECT id, 'noindexfixture.test', true, 'verified', now() FROM tenants WHERE slug = $1`,
+      [SLUG]
+    );
+  });
+
+  // Live custom domain without the flag: indexable (the control case).
+  const before = await request.get("http://127.0.0.1:3000/", { headers: { Host: "noindexfixture.test" } });
+  expect(await before.text()).not.toContain('name="robots"');
+
+  await ownerDb((db) =>
+    db.query(`UPDATE tenants SET features = features || '{"noindex": true}' WHERE slug = $1`, [SLUG])
+  );
+
+  const page404 = await request.get("http://127.0.0.1:3000/", { headers: { Host: "noindexfixture.test" } });
+  expect(await page404.text()).toMatch(/name="robots"[^>]*noindex/);
+  const robots = await request.get("http://127.0.0.1:3000/robots.txt", {
+    headers: { Host: "noindexfixture.test" },
+  });
+  expect(await robots.text()).toContain("Disallow: /");
+
+  await ownerDb(async (db) => {
+    await db.query(`UPDATE tenants SET features = features - 'noindex' WHERE slug = $1`, [SLUG]);
+    await db.query("DELETE FROM domains WHERE hostname = 'noindexfixture.test'");
+  });
+});
+
 test("draft tenant: 404 without preview, browsable with preview token, custom domain never resolves", async ({ page, request }) => {
   await ownerDb((db) => db.query("UPDATE tenants SET status = 'draft' WHERE slug = $1", [SLUG]));
   const preview = await ownerDb(async (db) =>
