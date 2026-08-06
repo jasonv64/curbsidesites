@@ -534,6 +534,53 @@ architecture review reconstructed them. Same rules as #1–82.
 
 ---
 
+# Session 1 hardening (02-BUILD-PROMPT, 2026-08-06) — #91–96
+
+91. **D23 mechanism: shared-secret header, not a Cloudflare-IP ingress
+    allowlist.** An IP allowlist authenticates Cloudflare's network — any CF
+    customer's Worker egresses from the same ranges — while the
+    `X-Curbside-Edge` secret authenticates OUR Worker specifically, is
+    testable locally (tests/trust-boundary.test.ts), and rolls back by
+    unsetting one env var. `TRUST_PROXY_HOST=1` without `EDGE_SHARED_SECRET`
+    now throws (D11 half-configured rule applied to D23's invariant).
+    **Disposition: promoted** (implements settled D23; mechanism choice
+    recorded here).
+92. **Intake auto-applies unreviewed image picks to production drafts** —
+    extends #31's "--auto is a demo-only convenience" to every intake tenant:
+    the draft is the sales artifact and placeholders undersell it, while the
+    contact sheet + human review before go-live (Part 10) is unchanged.
+    Slots that stay empty raise a `source_images` pending_actions item.
+    **Disposition: carried** — owner: D26 (the pre-live gate should require
+    the image review pass; fold it in when Jason settles D26's contents).
+93. **Apex-domain policy (D22 implementation calls):** provisionDomain
+    REFUSES an apex on a known non-flattening registrar (GoDaddy,
+    Squarespace, IONOS, Network Solutions) naming the www+forward shape;
+    unknown registrars proceed with an explicit caveat block in the
+    instructions; Cloudflare/Namecheap count as apex-capable (flattening /
+    ALIAS). `registrableDomain()` uses a small deliberate two-level-suffix
+    list, not a full public-suffix database — clients are overwhelmingly
+    .com/.net/.us. **Disposition: carried** — owner: Session E / first
+    client on an exotic TLD; re-check if a registrable-domain miss ever
+    shows up in deliverability checks.
+94. **Footer credits interim targets are fragment variants of the marketing
+    root** (`/#how-it-works` etc.) — anchor-text variety (the load-bearing
+    part of Invariant 11) unchanged, every href returns 200 today, and
+    tests/footer-credits.test.ts fails the build when any target dies.
+    **Disposition: carried** — owner: Session 2, which builds the real pages
+    and swaps the paths back (the test keeps holding either way).
+95. **CI's Postgres service image moved 16-alpine → 18-alpine** to match
+    local and production (#83). **Disposition: promoted** (aligns CI with
+    the settled runtime; recorded in ci.yml).
+96. **Unknown-host 404s now render through the proxy's gate rewrite** (the
+    root not-found page) instead of the tenant layout's notFound(), so a
+    preview-gated draft is byte-identical to a nonexistent host — draft
+    slugs derive predictably from business names and a distinguishable 404
+    would make drafts enumerable. Body shape of unknown-host 404s changed
+    (status did not). **Disposition: promoted** (part of the draft-leak fix;
+    e2e asserts both paths).
+
+---
+
 # Dispositions — 2026-08-04 architecture review
 
 Every entry above now carries one of: **promoted** (held; lives in the named
