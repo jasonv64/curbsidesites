@@ -45,6 +45,12 @@ dunning ladder ✓. **The platform cannot bill a client today.** Old
 `01-BUILD-PROMPT.md`'s "Sessions 1–5 are built, verified, and live"
 precondition was false; this file's sequencing corrects for it.
 
+**New direction (2026-08-06, conversation with Jason):** Focus on making sites
+feel custom and premium on day one through: (1) template beautification, (2)
+AI-driven page customization from onboarding data (copy, colors, layout), (3)
+reliable image sourcing from Unsplash. Component libraries deferred to Session 3
+pending Session 2 client feedback. Unsplash credentials now in Azure Key Vault.
+
 **Known-red:** CI has failed on every run in repo history (the axe/lifecycle
 e2e step) — D24 makes fixing it the first exit criterion. The origin honors
 forged `X-Forwarded-Host` from anyone (D23). Four of five footer-credit
@@ -263,6 +269,7 @@ targets 404 (Invariant 11 status note). Open decisions needing Jason: D26
 > - The suspension path keeps its **human gate** (SPECS.md §II Part 4).
 >   Never a webhook silently killing a live business's phone line over a $2
 >   decline.
+> - Client should revice an invoice and receipt and payments should be    >   automatic. Curbsidesites should also keep records.
 >
 > ### The live reveal — the intake-to-demo moment
 >
@@ -502,6 +509,82 @@ targets 404 (Invariant 11 status note). Open decisions needing Jason: D26
 
 ---
 
+## SESSION 2 — TEMPLATE BEAUTIFICATION & AI CUSTOMIZATION
+
+> **Goal:** Make draft tenants look stunning and feel custom on day one. Implement
+> AI-driven page customization from onboarding form data, and ensure all image
+> slots are populated reliably with high-quality stock imagery.
+>
+> **Status:** Planned for immediate execution (after Session 1 ships). This is the
+> highest-leverage work to make sites "blow people away" on first look.
+>
+> **Key themes:**
+>
+> - **Template refinement:** Polish the existing section templates
+>   (`src/components/sections/*`) to look premium and modern. Every section must
+>   render well with both real and placeholder content. Focus on spacing, typography,
+>   component polish, and brand integration.
+>
+> - **Image sourcing reliability:** Wire Unsplash integration into the intake
+>   onboarding pipeline so tenants never create without images (D11 miss from
+>   Session 1). Images source immediately post-creation, write to Azure Blob
+>   Storage, and render without fallback. Brand the placeholders as "loading" states
+>   only, not permanent states.
+>
+> - **AI-driven customization from intake data:**
+>   - Extract business personality / industry / values from intake form
+>   - Use Anthropic API to generate initial copy variants for hero, about, CTA sections
+>   - Apply industry-specific tone (startups sound different than law firms)
+>   - Suggest color palette and fonts based on uploaded logo or industry profile
+>   - Generate service-specific content (service page blurbs, FAQ) from form input
+>   - This is the "really leveraging their own branding" part — every tenant's site
+>     reads as custom, not templated
+>
+> - **Image slot intelligence:** Map image search queries to industry + trade + city
+>   (already in `imageSlots()`, RUNBOOK); ensure results are relevant and high-quality.
+>   Fall back gracefully if Unsplash rate-limits or network fails.
+>
+> - **Brand token customization:** If a logo is uploaded, extract primary/secondary
+>   colors and apply them to component variants. Use `src/lib/brand.ts` logic to
+>   ensure contrast and accessibility pass automatically.
+>
+> **What stays deferred (Session 3):**
+> - Component library system (reusable, composable elements across all sections)
+> - Section-order editor (let clients rearrange sections post-creation)
+> - Full theme editor (write-time design customization)
+>
+> **Do:**
+> 1. Polish every section template for visual quality. Test with real brand tokens,
+>    real copy, real images — not placeholder screenshots.
+> 2. Integrate `npm run images:source` into `createTenantFromIntake()` so every new
+>    tenant arrives with populated image slots (not lazy-loaded).
+> 3. Confirm Unsplash keys are in Azure Key Vault (done: `unsplash-app-id`,
+>    `unsplash-access-key`, `unsplash-secret-key`); wire the app to fetch at runtime.
+> 4. Build an AI-customization pipeline:
+>    - On intake form submission, after brand proposal and before preview link
+>    - Send intake data to Anthropic API (industry, business name, services, voice notes)
+>    - Generate hero headline, about story, CTA copy
+>    - Optionally extract colors from logo (if uploaded); propose font pairing
+>    - Store generated proposals in `brand_proposals` row; use one as live (not random)
+> 5. Test the full flow: submit a new intake → preview link renders within 10s with
+>    images sourced, copy customized, colors applied, and no visible placeholders.
+> 6. Verify D11 invariant: every draft tenant is "fully browsable, screenshot-ready"
+>    on day one.
+>
+> **Acceptance:**
+> - A new tenant created through intake renders with no placeholder SVG images
+>   anywhere (every slot has a real photo)
+> - Brand colors and font pairing reflect the business or logo (not random defaults)
+> - Hero copy, about section, and CTA text feel customized to the business type
+>   (verified by eye: does a plumbing company's site read differently from a
+>   marine service's?)
+> - Resend email to the prospect includes a working preview link, not a dead one
+> - Unsplash API errors degrade gracefully: images are still there on retry,
+>   not silently broken
+> - `npm run verify` passes; no new RLS bypasses; no secrets in Git history
+
+---
+
 ## SESSION F — PRICING & PACKAGING RECONCILIATION
 
 > Runs after anything in Sessions 3–E changes what's actually sellable. The
@@ -532,6 +615,30 @@ targets 404 (Invariant 11 status note). Open decisions needing Jason: D26
 > or add-on in Stripe flips the right flags and provisions nothing by hand;
 > `PRICING.md` and the marketing pricing page agree to the letter; no
 > customer can pay for something that silently doesn't work.
+
+---
+
+## SESSION 3 — COMPONENT LIBRARY & FLEXIBLE TEMPLATING (POST–CLIENT 1)
+
+> **Goal:** Build a reusable component library so clients can compose custom pages
+> from a palette of pre-built sections. This runs **after Client 1 is live** so you
+> have real feedback on what clients actually want and how they use templates.
+>
+> **Status:** Deferred until Client 1 is active. Blocked on: real client experience
+> with Session 2 templates, proof that components are wanted (vs. curated templates),
+> designer availability for component design system.
+>
+> **Scope (not yet designed, example only):**
+> - Extract section logic into smaller, composable components
+> - Build a section-arrangement UI in the client portal (drag-and-drop or list)
+> - Allow clients to enable/disable sections and reorder them post-launch
+> - Provide a library of section *variants* (e.g., hero with/without video, services
+>   grid as cards/list)
+> - Preserve the AI customization from Session 2 as a default, but let clients
+>   override copy / images / colors
+>
+> **Acceptance criteria:** TBD (will be refined based on Client 1 feedback and
+> operational experience with template-driven sites)
 
 ---
 
