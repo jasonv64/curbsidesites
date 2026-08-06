@@ -1,4 +1,4 @@
-# HANDOFF — curbsidesites / main — 2026-08-04
+# HANDOFF — curbsidesites / main — 2026-08-06 (Session 1: hardening & the trust boundary)
 
 <!--
 Written at session end or whenever work changes hands. Keep this comment block.
@@ -12,99 +12,155 @@ Written at session end or whenever work changes hands. Keep this comment block.
 
 ## State
 
-This was a documents-only session: re-validate the architecture record against
-the deployed system, consolidate the doc set, and regenerate the build plan.
-An adversarial review (81 checks against code, tests, CI history, DNS, and the
-live production surfaces — read-only throughout) drove the changes. Output:
-`ARCHITECTURE.md` amended (document map, D8/D15 corrected, §5 rewritten
-honestly, §7 status notes, new D21–D28), fifteen markdown files consolidated
-to eight (`SPECS.md` = the three plane specs; `RUNBOOK.md` gained COSTS/
-CALENDAR/SECRETS as Appendices A–C; `00-`/`01-BUILD-PROMPT.md` →
-`02-BUILD-PROMPT.md`), all 90 `ASSUMPTIONS.md` entries dispositioned (2
-refuted, 13 carried, rest promoted), `ONBOARDING.md`'s stale gaps reconciled.
-**No code was changed and nothing was deployed.** Nothing is committed yet —
-the working tree holds the whole change.
+`02-BUILD-PROMPT.md` **Session 1** ran. Eight commits on `main`
+(`f25fe62`..`e6d283a`), every item from the session's brief addressed in code
+and covered by a test that runs in CI. **Nothing is deployed** — the whole
+session's output is verified locally against a from-empty database and pushed
+to `main`; production still runs the pre-session image.
 
-## Proven — checks actually run (this session, by the review agent unless noted)
+Two things did not complete, both for reasons outside the code:
 
-- RLS isolation holds — **verified by:** `npm run test:rls`, 8/8 pass against
-  the real dev DB as `curbside_app`, both attack paths.
-- CI has never passed — **verified by:** GitHub Actions API, all 5 runs on
-  `main` `completed failure`; failing step is the axe/lifecycle e2e. `main`
-  has no branch protection.
-- The origin honors forged host headers — **verified by:** `curl` to the ACA
-  FQDN with `X-Forwarded-Host: iron-ridge-offroad…` → 200, 104,824 bytes;
-  no header → 404.
-- The fixture ships junk NAP in public structured data, indexable —
-  **verified by:** GET www.dubdating.com: JSON-LD `telephone +11231231231`,
-  robots `Allow: /`, no noindex, 8 placeholder image refs, 0 blob refs.
-- Four of five footer-credit targets 404 — **verified by:** resolving all
-  five `CREDITS` hrefs from `src/components/site/footer.tsx` against
-  production.
-- Deliverability checks look up the wrong host — **verified by:**
-  `_dmarc.www.dubdating.com` → empty; `_dmarc.dubdating.com` → GoDaddy
-  default `p=quarantine` (reports to the registrar, not us).
-- Demo tenants have zero sourced images — **verified by:** read-only SQL
-  against the dev DB: 0/10 URLs on both flagship tenants (refutes
-  ASSUMPTIONS #31).
-- Failover snapshots are current — **verified by:** `HEAD` on both failover
-  blobs, `Last-Modified: Tue, 04 Aug 2026 09:00:41 GMT`.
-- Doc consolidation lost nothing — **verified by (this session):** pre-merge
-  line counts match SPECS.md §-offsets exactly (247/211/157); RUNBOOK
-  appendices at lines 1499/1602/1673; repo-wide grep shows no dangling
-  references to the six retired filenames outside deliberate "formerly"
-  notes; every session heading from 00/01 appears in 02's traceability table.
+1. **The D24 exit criterion (one green CI run) has no run to point at.**
+   The root cause was found, fixed, and locally proven, but **GitHub Actions
+   was in a `major_outage` for this entire session** (githubstatus.com,
+   incident still `investigating` at 22:18Z) and produced no run for any of
+   the eight pushed commits. Nothing further can be done from here.
+2. **The production cutover is deliberately unstarted.** It changes security
+   posture (D23), touches production data (the D21 flag), and deletes a file
+   — all house-standard stop-list items. The full ordered procedure with
+   acceptance commands is written up as **RUNBOOK 11.5**, including why the
+   Worker must deploy before the app.
+
+`npm run verify` now covers five suites that did not exist this morning; it
+runs green end to end.
+
+## Proven — checks actually run this session
+
+- **The CI failure is understood and fixed.** Named from the run log
+  (run 30966025172, `gh`-equivalent via the Actions API): `control-plane.spec.ts`
+  **12.4** (unconsented-transcript refusal) and **12.5** (suspend → restore).
+  Both assert against `bayside-detailing` / `sunrise-pool-care`, which only
+  `npm run db:seed:fleet` creates — and CI never ran it. It passed locally
+  only because dev databases had the fleet seeded by earlier sessions.
+  **Verified by:** creating a fresh `curbside_ci` database and replaying the
+  exact workflow (migrate → seed → seed:fleet → seed:growth → build →
+  playwright) — **49/49 green**, where the old workflow order fails 2.
+- **`npm run verify` green end to end** — build clean, `test:rls` 8/8,
+  `test:growth` 26/26, `test:boundary` 5/5, `test:domains` 8/8,
+  `test:suspend-gate` 3/3, `test:credits` 6/6, `test:e2e` 50/50.
+- **The draft-content leak is closed.** The earlier metadata-only patch
+  (`174dddc`) did **not** close it — reproduced at that commit: 404 with
+  17,465 bytes including business name, phone, service names in the flight
+  payload. After the fix: `/`, `/services`, `/contact` all 404 with **zero**
+  occurrences of the business name, phone, or tagline, and the body is
+  **byte-identical to a nonexistent host** (both 8,344 bytes). The
+  `?preview=<token>` handshake still renders in full (200, 43,293 bytes).
+- **The tripwire actually catches the bug.** Reverted the fix, rebuilt, ran
+  the new test → fails with `/ must not disclose "Bare Demo Diesel"`;
+  restored → passes. A test that has never failed proves nothing.
+- **D23 is still exploitable in production right now** (pre-deploy baseline,
+  read-only GET, 2026-08-06): forged `X-Forwarded-Host` at the bare ACA FQDN
+  → **200, 104,824 bytes**; no header → 404; through Cloudflare → 200.
+  The fix's behavior is proven at the unit level instead: forged-without-secret
+  → 403, wrong secret → 403, correct secret → tenant rewrite, half-configured
+  → throws.
+- **Intake now sources images.** A real intake submission through the server
+  action fires `sourceForIntake` (server log). A real Openverse run through
+  the relocated module filled `url` **and** `credit` for every slot and wrote
+  slot-named files through the blob seam. Calling it twice produces exactly
+  **1** open `source_images` queue item (dedupe holds).
+- **Two primary domains are now unrepresentable.** Migration 006 applied to
+  two databases; inserting a second primary raises
+  `domains_one_primary_per_tenant`. `releaseDomains` clears `is_primary`;
+  release → re-provision keeps the registrar (`GoDaddy`, not NULL).
+- **Resend's sending domain IS configured** — resolving the ONBOARDING
+  contradiction. **Verified by DNS:** `send.curbsidesites.com` has
+  `v=spf1 include:amazonses.com ~all` plus Resend's `feedback-smtp` MX,
+  `resend._domainkey.curbsidesites.com` carries a DKIM key, DMARC present
+  (`p=none`). The apex SPF is Outlook-only, so Resend mail aligns via DKIM,
+  which DMARC accepts. ONBOARDING.md updated.
+- **D27 is live exactly as recorded.** `www.dubdating.com/robots.txt` serves
+  Cloudflare's Managed block (`ai-train=no`, GPTBot/ClaudeBot/CCBot
+  `Disallow: /`) prepended to our generated body; the page carries **no**
+  robots meta — the fixture is indexable today.
+- **Three of five footer-credit targets 404'd** (`/how-it-works`,
+  `/care-plans`, `/work`) — resolved against production before changing them;
+  all five interim targets now return 200, asserted by `test:credits`.
 
 ## Assumed — believed but not verified
 
-- Resend production status — DNS shows a configured sending domain;
-  `ONBOARDING.md` said "not set up." Contradiction recorded there; needs
-  `/api/status` + `synthetic_checks` with prod access.
-- Whether production has duplicate `is_primary` domain rows right now — the
-  bug is confirmed in code at HEAD; the prod-DB check
-  (`SELECT tenant_id, count(*) FROM domains WHERE is_primary GROUP BY 1
-  HAVING count(*)>1`) needs prod access.
-- Whether any onboarding call was ever recorded, and whether MSA/consent
-  language got attorney review first (RUNBOOK Appendix B #5 — Penal Code
-  §632 is criminal) — not answerable from the repo; only Jason knows.
-- Actual Azure spend vs. RUNBOOK Appendix A — needs
-  `az consumption usage list`.
-- The draft-content leak reproducing in prod today — confirmed in code; the
-  live repro wasn't run against a real draft slug (declined to enumerate).
+- **That any of this works in production.** Every check above ran locally or
+  read production read-only. The deployed image is unchanged.
+- **That CI will be green.** The workflow was replayed faithfully by hand
+  against a from-empty database, but no GitHub-hosted run exists. The Actions
+  outage is the only reason.
+- **Whether production holds duplicate `is_primary` rows right now** — needs
+  the prod DB (the query is in RUNBOOK 11.5 step e). Migration 006 repairs
+  them on apply either way.
+- **Whether the app's `email` integration is flipped live in production**
+  (vs. demo) — DNS is confirmed, the app-side flag is not. Command in
+  ONBOARDING's gaps.
+- **Whether the draft leak reproduces in production today** — confirmed in
+  code at the old commit and fixed; the live repro against a real draft slug
+  wasn't run (declined to enumerate real drafts).
+- **Actual Azure spend vs. RUNBOOK Appendix A** — unchanged from the last
+  handoff; needs `az consumption usage list`.
 
 ## Next single action
 
-Commit this working tree (it is the entire record consolidation, reviewable
-as one change), then start `02-BUILD-PROMPT.md` **Session 1**, whose exit
-criterion zero is: name the failing e2e test from `gh run view --log-failed`
-and get one green CI run on `main`.
+**Run RUNBOOK 11.5 — the Session 1 cutover** (Worker secret + deploy →
+app secret/env → `npm run db:migrate` → image), then work its five
+acceptance checks. The one that matters most: the forged-`X-Forwarded-Host`
+curl must return **403** at the origin while the same page through
+Cloudflare returns **200**. Until that deploy lands, the draft leak and the
+open origin are live in production even though both are fixed on `main`.
 
 ## After that (context, not commitments)
 
-Session 1 continues into the trust boundary (D23), the draft leak, intake
-image sourcing, the domain fixes (D22), the fixture noindex (D21), and the
-[YOU] batch for D26/D27/D28. Then Session 2 (marketing site + billing — the
-platform cannot bill anyone today). Sequencing settled by Jason 2026-08-04:
-hardening before revenue.
+The other [YOU] items batched for Jason, none blocking:
+
+- **Branch protection on `main`** requiring `verify` — needs one green run
+  first (D24), so it waits on the Actions outage clearing.
+- **`rm .curbside-env-01`** — the stale world-readable copy in the working
+  tree (D28). Confirmed gitignored and never committed; 5,205 bytes, mode
+  644. The canonical copy is `~/.curbside-env-01`, mode 600.
+- **Three open decisions still need you, and Session 1 could not settle
+  them:** **D26** (what a tenant must prove before `status='live'` — the
+  image-review pass should probably join it, see ASSUMPTIONS #92),
+  **D27** (Managed robots.txt vs. the llms.txt strategy — now with the
+  measured interaction below), **D28** (break-glass credentials, second
+  alert recipient).
+- Then **Session 2** — the platform still cannot bill anyone.
 
 ## Known traps
 
-- Six markdown files were retired into `SPECS.md` and RUNBOOK appendices; old
-  filenames appear throughout git history and older prose. The mapping lives
-  in `ARCHITECTURE.md` §0's document map — "TENANT-APP.md Part 10" =
-  "SPECS.md §I Part 10".
-- `wrangler.toml`'s `*/*` route must NOT be reverted to explicit patterns —
-  client domains stop routing (the file says so inline). Same file: the
-  Worker's ACME passthrough is what makes custom-hostname DV possible at all
-  (ASSUMPTIONS #87).
-- `TRUST_PROXY_HOST=1` is only safe behind a proxy that overwrites
-  `X-Forwarded-Host` — and D23 records that the origin currently isn't
-  locked, so treat that env var with respect until Session 1 closes it.
-- `~/.curbside-env-01` is zsh — sourcing it under bash exits 127. A stale
-  world-readable copy sits **inside the working tree** (gitignored); deleting
-  it is a Session 1 [YOU] item — don't commit around it blindly.
-- Postgres 18's Docker image changed its data-volume path — an image bump
-  can silently reset the local DB (ASSUMPTIONS #83).
-- CI being red is not new noise from this session's changes — it has failed
-  on every run in history. Don't "fix" it by deleting the axe step; that
-  step is the D12 gate.
+- **A stale `next start` on the port will lie to you.** This session's leak
+  fix looked like it had failed because an old server still held :3000/:3100
+  — the "leak" was the previous build answering. Kill by PID
+  (`lsof -nP -iTCP:3000 -sTCP:LISTEN -t`) before believing any verification.
+  README's gotcha list now covers macOS, not just Windows.
+- **Deploy order for D23 is not optional.** Worker first (the origin ignores
+  an unknown header), app second. Reversed, every request arrives without
+  the secret and the whole fleet 403s. Rollback is unsetting
+  `EDGE_SHARED_SECRET` (or `TRUST_PROXY_HOST`) on the Container App.
+- **`TRUST_PROXY_HOST=1` now throws without `EDGE_SHARED_SECRET`** — that is
+  D11's half-configured rule applied deliberately, not a bug. A production
+  boot without the secret fails loudly instead of serving forgeable tenancy.
+- **The D21 noindex flag works via the meta tag, not robots.txt.**
+  Cloudflare's Managed robots.txt prepends `Allow: /`, and for equal-length
+  rules the least restrictive wins, so served robots.txt still reads as
+  crawlable. That is *necessary here*: the crawler must fetch the page to
+  see `noindex`. Do not "fix" the robots.txt half without settling D27 —
+  blocking the crawl would strand the fixture in the index permanently.
+- **Image sourcing runs fire-and-forget from intake** (the preview link must
+  ship immediately). It never throws; failures land as a `source_images`
+  item in the staff queue. `SKIP_IMAGE_SOURCING=1` is set in CI so runs
+  don't hammer Openverse — the queue item is still recorded.
+- **`scripts/lib/image-sourcing.ts` is now a re-export shim.** The real
+  module is `src/lib/control/image-sourcing.ts` and it runs on the **control
+  role**, not the owner role the old script used.
+- Carried from the last handoff and still true: the retired-filename mapping
+  in `ARCHITECTURE.md` §0; `wrangler.toml`'s `*/*` route must not be
+  reverted; the Worker's ACME passthrough is load-bearing; Postgres 18's
+  Docker volume path can silently reset the local DB (#83);
+  `~/.curbside-env-01` is zsh-only.

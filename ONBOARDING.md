@@ -282,22 +282,28 @@ Their domain is always theirs. Nothing here touches their registrar account.
 
 ## Known gaps (reconciled 2026-08-04 — two earlier entries here were stale: Cloudflare for SaaS IS enabled and the `*/*` route IS restored, both proven by the 2026-07-19 go-live)
 
-- **Draft tenants leak content.** An anonymous request to a `draft` tenant's
-  platform subdomain returns 404 with the tenant's business name, phone,
-  services, and the owner's intake `voice` text still in the response body
-  (Next streams the page before the layout's gate resolves). Slugs are
-  guessable from business names. Queued in `02-BUILD-PROMPT.md` Session 1.
-  **Until it is fixed, treat a draft site as public** — don't put anything in
-  intake you wouldn't show a competitor.
+- ~~**Draft tenants leak content.**~~ **FIXED in code 2026-08-06** (Session 1,
+  commit `26012dc`): the gate moved to `src/proxy.ts`, ahead of any render, and
+  a gated draft is now byte-identical to a nonexistent host. Proven locally
+  (zero tenant strings in the 404 body on `/`, `/services`, `/contact`; the
+  preview-cookie path still renders in full) with a tripwire in the e2e suite.
+  **Still deployed? No — pending the Session 1 production cutover (RUNBOOK
+  11.5). Until that deploy lands, treat a draft site as public.**
 - **The origin is publicly addressable** and honors forged `X-Forwarded-Host`
-  (D23) — locking ACA ingress to the edge is the top item of
-  `02-BUILD-PROMPT.md` Session 1.
-- **Resend status is contradictory — verify before trusting automated emails.**
-  This file previously said "not set up"; DNS now shows a configured sending
-  domain (`send.curbsidesites.com` SPF, `resend._domainkey` DKIM, DMARC
-  present). Confirm with `/api/status` and the `synthetic_checks` table
-  (`kind='form_delivery'`) before relying on the chase/instruction emails;
-  until confirmed, send the DNS records by hand.
+  (D23). **Fixed in code 2026-08-06** (commit `98e2601`, shared-secret header
+  validated in `src/proxy.ts`) — **not yet deployed**; re-verified still
+  exploitable against the bare FQDN on 2026-08-06 (forged header → 200,
+  104,824 bytes). Closes with the same cutover.
+- **Resend sending domain: CONFIRMED configured** (verified 2026-08-06 by DNS,
+  replacing this file's earlier "not set up"): `send.curbsidesites.com` carries
+  `v=spf1 include:amazonses.com ~all` plus Resend's `feedback-smtp` MX,
+  `resend._domainkey.curbsidesites.com` has a DKIM key, and DMARC is present
+  (`p=none`). Note the apex SPF is Outlook-only — mail from Resend aligns via
+  DKIM, not SPF, which DMARC accepts. **Still unverified: whether the app's
+  `email` integration is actually flipped live in production** rather than
+  serving demo. Check before relying on chase/instruction emails:
+  `curl -H "Authorization: Bearer $STAFF_STATUS_TOKEN" https://<fqdn>/api/status`
+  plus `synthetic_checks` where `kind='form_delivery'`.
 - **Stripe is deferred** (RUNBOOK Phase 9) — no billing on a "paying" client.
   The billing build is `02-BUILD-PROMPT.md` Session 2.
 - **dubdating.com is a test fixture, not a client (D21)** — it is currently

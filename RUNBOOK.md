@@ -1357,6 +1357,105 @@ az containerapp job start --resource-group $RG --name curbside-export           
 Migrations stay **forward-only and additive** — that discipline (already the
 repo's rule) is what makes image rollback below always DB-safe.
 
+### 11.5 [YOU] The Session 1 hardening cutover (2026-08-06) — ORDER MATTERS
+
+Session 1's code is merged and verified locally (`npm run verify` green:
+build clean, RLS 8/8, growth 26/26, boundary 5/5, domains 8/8, suspend-gate
+3/3, credits 6/6, e2e 50/50) but **not deployed**. Two of these steps change
+security posture and one touches production data, so they were deliberately
+left for a human (house standard stop-list).
+
+**The Worker goes first.** The origin ignores an unrecognized header, so
+deploying the Worker early is harmless; deploying the app first would 403
+all traffic, because every request would arrive without the secret.
+
+```bash
+source ~/.curbside-env-01     # zsh only (ASSUMPTIONS #84)
+
+# 1. Mint the shared secret ONCE; the same value goes to both sides.
+EDGE_SECRET=$(openssl rand -base64 32)
+
+# 2. Edge Worker first (safe: origin ignores the extra header today).
+cd infra/cloudflare
+printf '%s' "$EDGE_SECRET" | npx wrangler secret put EDGE_SHARED_SECRET
+npx wrangler deploy
+cd ../..
+# Sanity: sites still serve through the edge.
+curl -s -o /dev/null -w '%{http_code}\n' https://iron-ridge-offroad.sites.curbsidesites.com/   # 200
+
+# 3. App: secret + env var, then the image.
+az containerapp secret set -g $RG -n $CONTAINER_APP \
+  --secrets edge-shared-secret="$EDGE_SECRET"
+az containerapp update -g $RG -n $CONTAINER_APP \
+  --set-env-vars EDGE_SHARED_SECRET=secretref:edge-shared-secret
+
+# 4. Migration 006 BEFORE the new image (it repairs duplicate/released
+#    primaries, then adds the partial unique index). Forward-only, additive.
+npm run db:migrate            # DATABASE_URL_OWNER from the env file
+
+# 5. Deploy the image (next tag).
+az acr build --registry $CONTAINER_REGISTRY --image curbside-app:vNEXT .
+az containerapp update -g $RG -n $CONTAINER_APP \
+  --image "$ACR_LOGIN_SERVER/curbside-app:vNEXT"
+```
+
+**Acceptance — run all five, they are the session's exit criteria:**
+
+```bash
+# (a) D23: the exact attack that works today must now 403 at the origin,
+#     while the same page through Cloudflare still returns 200.
+curl -s -o /dev/null -w 'origin forged: %{http_code}\n' \
+  -H 'X-Forwarded-Host: iron-ridge-offroad.sites.curbsidesites.com' "https://$APP_FQDN/"   # want 403
+curl -s -o /dev/null -w 'through edge:  %{http_code}\n' \
+  https://iron-ridge-offroad.sites.curbsidesites.com/                                      # want 200
+# Baseline before this deploy (2026-08-06): forged → 200, 104,824 bytes.
+
+# (b) Draft leak: pick a real draft slug; 404 with NO tenant content in the body.
+curl -s https://<draft-slug>.sites.curbsidesites.com/ | grep -c '<title>'   # want 0
+# And the byte-identical check: same response as a nonexistent host.
+curl -s https://no-such-tenant.sites.curbsidesites.com/ | wc -c
+
+# (c) Health + a semantic check (Invariant 9).
+curl -s "https://$APP_FQDN/api/health"
+curl -s https://iron-ridge-offroad.sites.curbsidesites.com/ | grep -c '760'
+
+# (d) Post-deploy failover snapshot (D6) — and confirm it PROMOTED this time
+#     (the is_primary bug had it refusing for a week).
+az containerapp job start -g $RG -n curbside-export
+
+# (e) Nightly export now picks verified, non-released primaries only:
+psql "$DATABASE_URL_OWNER" -c "SELECT tenant_id, count(*) FROM domains WHERE is_primary GROUP BY 1 HAVING count(*) > 1"
+# want zero rows (and after migration 006 it is a constraint, not a hope)
+```
+
+**6. [YOU] Flip the fixture to noindex (D21)** — production data write:
+
+```bash
+psql "$DATABASE_URL_OWNER" -c \
+  "UPDATE tenants SET features = features || '{\"noindex\": true}' WHERE slug = 'dub-dates'"
+curl -s https://www.dubdating.com/ | grep -oE '<meta name="robots"[^>]*>'   # want noindex
+```
+
+Note the D27 interaction: Cloudflare's Managed robots.txt prepends
+`User-agent: * / Allow: /` ahead of our generated `Disallow: /`, and for
+equal-length rules the least restrictive wins — so served robots.txt will
+still read as crawlable. That is *fine here*, and in fact necessary: the
+crawler must be allowed to fetch the page to see the `noindex` meta tag,
+which is the directive that actually deindexes. Do not "fix" the robots.txt
+half without settling D27.
+
+**7. [YOU] Delete the stale world-readable env copy** in the working tree
+(D28; gitignored, never committed — confirmed at
+`.curbside-env-01`, 5,205 bytes, mode 644, 2026-08-06). The canonical copy
+is `~/.curbside-env-01` (mode 600). Diff them first if you want certainty,
+then `rm .curbside-env-01`.
+
+**8. [YOU] Branch protection** — only after one green CI run exists on
+`main` (D24): Settings → Branches → add rule for `main`, require the
+`verify` status check. GitHub Actions was in a **major outage** through this
+session (githubstatus.com), so no run has been produced against the fix yet;
+the fix itself is verified locally against a from-empty database.
+
 ### 11.2 [RUN] Keep old revisions around (rollback vocabulary)
 
 ```powershell
