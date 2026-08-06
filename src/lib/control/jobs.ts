@@ -13,7 +13,7 @@ import { sendTenantEmail } from "@/lib/adapters/email";
 import type { TenantBundle } from "@/lib/tenant";
 import { controlOne, controlQuery } from "@/lib/control/db";
 import { notifyStaff } from "@/lib/control/notify";
-import { checkPendingDomains, chaseStalledDomains } from "@/lib/control/domains";
+import { checkPendingDomains, chaseStalledDomains, registrableDomain } from "@/lib/control/domains";
 import { runDunning } from "@/lib/control/billing";
 
 // ---------------------------------------------------------------------------
@@ -182,7 +182,12 @@ export async function deliverabilityChecks(): Promise<{ ran: number; failing: nu
       );
       continue;
     }
-    const detail: Record<string, unknown> = {};
+    // D22: email authentication records live at the REGISTRABLE domain.
+    // Looking them up at the site hostname (`www.<domain>`) is structurally
+    // guaranteed to false-alarm on every www custom hostname forever —
+    // `_dmarc.www.dubdating.com` is always empty.
+    const mailDomain = registrableDomain(d.hostname);
+    const detail: Record<string, unknown> = { checked_domain: mailDomain };
     const lookup = async (name: string, contains: string) => {
       try {
         const txt = (await resolveTxt(name)).map((r) => r.join(""));
@@ -191,9 +196,9 @@ export async function deliverabilityChecks(): Promise<{ ran: number; failing: nu
         return false;
       }
     };
-    detail.spf = await lookup(d.hostname, "v=spf1");
-    detail.dmarc = await lookup(`_dmarc.${d.hostname}`, "v=DMARC1");
-    detail.dkim = await lookup(`resend._domainkey.${d.hostname}`, "p=");
+    detail.spf = await lookup(mailDomain, "v=spf1");
+    detail.dmarc = await lookup(`_dmarc.${mailDomain}`, "v=DMARC1");
+    detail.dkim = await lookup(`resend._domainkey.${mailDomain}`, "p=");
     const ok = Boolean(detail.spf && detail.dmarc && detail.dkim);
     if (!ok) {
       failing++;

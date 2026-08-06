@@ -5,10 +5,45 @@
  * not a memory.
  */
 import { customHostnames } from "@/lib/adapters/cloudflare";
-import { audit, controlOne, controlQuery, revalidateTenant } from "@/lib/control/db";
+import { audit, controlOne, controlQuery, controlTx, revalidateTenant } from "@/lib/control/db";
 import { notifyStaff, sendPlatformEmail } from "@/lib/control/notify";
 
 const CHASE_AFTER_DAYS = 3;
+
+// ---------------------------------------------------------------------------
+// Hostname anatomy (D22). Deliberately small: our clients' domains are
+// overwhelmingly .com/.net/.us; the two-level list covers the plausible
+// stragglers without dragging in a full public-suffix database.
+// ---------------------------------------------------------------------------
+
+const TWO_LEVEL_SUFFIXES = new Set([
+  "co.uk", "org.uk", "me.uk", "com.au", "net.au", "org.au",
+  "co.nz", "com.mx", "com.br",
+]);
+
+/** "www.dubdating.com" → "dubdating.com". Where SPF/DKIM/DMARC actually live. */
+export function registrableDomain(hostname: string): string {
+  const labels = hostname.toLowerCase().replace(/\.$/, "").replace(/:\d+$/, "").split(".");
+  if (labels.length <= 2) return labels.join(".");
+  const take = TWO_LEVEL_SUFFIXES.has(labels.slice(-2).join(".")) ? 3 : 2;
+  return labels.slice(-take).join(".");
+}
+
+/** A zone apex can never carry a CNAME (RFC 1034) — the D22 branch point. */
+export function isApex(hostname: string): boolean {
+  const h = hostname.toLowerCase().replace(/\.$/, "").replace(/:\d+$/, "");
+  return h === registrableDomain(h);
+}
+
+/**
+ * Registrars that CAN attach an apex to a CNAME-style target (flattening or
+ * ALIAS). Everyone else — GoDaddy included, found the hard way provisioning
+ * dubdating.com (D22) — needs the `www` custom hostname + an apex forward.
+ */
+const APEX_CAPABLE_NOTE: Record<string, string> = {
+  Cloudflare: "Cloudflare flattens CNAME records at the bare domain automatically — add it like any other record.",
+  Namecheap: "For the bare domain, pick the ALIAS record type instead of CNAME (Namecheap supports ALIAS at '@').",
+};
 
 // ---------------------------------------------------------------------------
 // Registrar-specific instructions (D8: they own the credentials; we send
@@ -63,6 +98,44 @@ export function registrarInstructions(
       "Find the DNS settings (sometimes called DNS records, zone editor, or name server settings).",
       "Add the records listed below.",
     ];
+
+  // D22: the instruction generator branches on apex-vs-subdomain, because a
+  // CNAME cannot exist at a zone apex (RFC 1034) and most registrars don't
+  // flatten. Emitting "CNAME <apex> → …" to a GoDaddy owner is an
+  // instruction that cannot be followed — exactly what happened provisioning
+  // dubdating.com.
+  const apex = isApex(hostname);
+  const apexNote = APEX_CAPABLE_NOTE[registrar ?? ""];
+  const apexBlock: string[] = [];
+  if (apex && apexNote) {
+    apexBlock.push("", `Note for the bare-domain record: ${apexNote}`);
+  } else if (apex) {
+    // Unknown registrar (known non-flattening ones are refused upstream in
+    // provisionDomain): give the honest caveat + the working alternative.
+    apexBlock.push(
+      "",
+      "Heads up: some DNS providers won't accept a CNAME on the bare domain (no 'www').",
+      `If yours refuses it, just reply to this email — we'll connect www.${hostname} instead,`,
+      `and you'll add a domain forward from ${hostname} to https://www.${hostname}.`,
+      "Make sure any forward points at the https:// address, marked permanent (301)."
+    );
+  }
+
+  // The www custom hostname is the D22 shape for non-flattening registrars —
+  // visitors still type the bare domain, so the apex forward is part of the
+  // setup, and it MUST land on HTTPS (the dubdating.com forward hopped
+  // through cleartext http).
+  const rd = registrableDomain(hostname);
+  const forwardBlock: string[] =
+    !apex && hostname.toLowerCase().replace(/\.$/, "") === `www.${rd}`
+      ? [
+          "",
+          `Then set up domain forwarding so the bare domain reaches the site:`,
+          `  • Forward ${rd} → https://www.${rd}   (permanent / 301)`,
+          `  • The destination must start with https:// — a plain http:// forward sends every visitor through an insecure hop.`,
+        ]
+      : [];
+
   return [
     `Connecting ${hostname} to your new site — takes about 5 minutes:`,
     "",
@@ -70,6 +143,8 @@ export function registrarInstructions(
     "",
     "Records to add:",
     ...targets.map((t) => `  • Type: ${t.type}   Name: ${t.name}   Value: ${t.value}`),
+    ...apexBlock,
+    ...forwardBlock,
     "",
     "That's everything. We check automatically every few minutes and will email you the moment it connects — usually under an hour, occasionally up to a day.",
     "We never need your registrar password, and the domain stays yours, always.",
@@ -89,26 +164,54 @@ export async function provisionDomain(tenantId: string, hostname: string, actor:
     [tenantId]
   );
   if (!tenant) throw new Error("provisionDomain: unknown tenant");
+  const host = hostname.toLowerCase().replace(/\.$/, "");
 
-  const ch = await provider.create(hostname);
-  const row = await controlOne<{ registrar: string | null }>(
-    `INSERT INTO domains (tenant_id, hostname, is_primary, verification_status, cf_hostname_id, instructions_sent_at)
-     VALUES ($1, $2, true, 'pending', $3, now())
-     ON CONFLICT (hostname) DO UPDATE
-       SET cf_hostname_id = $3, verification_status = 'pending', instructions_sent_at = now(),
-           released_at = NULL, verified_at = NULL
-     RETURNING registrar`,
-    [tenantId, hostname.toLowerCase(), ch.id]
+  // D22(b): re-provisioning after releaseDomains used to create a fresh row
+  // with registrar NULL, silently degrading the tailored instructions to the
+  // generic "we have it as: unknown" fallback. Carry the registrar forward
+  // from any prior row for this tenant (the intake row, or the released one).
+  const prior = await controlOne<{ registrar: string | null }>(
+    `SELECT registrar FROM domains
+      WHERE tenant_id = $1 AND registrar IS NOT NULL
+      ORDER BY created_at DESC LIMIT 1`,
+    [tenantId]
   );
+  const knownRegistrar = prior?.registrar ?? null;
+
+  // D22(a): an apex on a registrar without CNAME flattening is impossible to
+  // instruct (RFC 1034). Refuse loudly with the working shape instead of
+  // emailing the client steps they cannot follow.
+  if (isApex(host) && knownRegistrar && REGISTRAR_PATHS[knownRegistrar] && !APEX_CAPABLE_NOTE[knownRegistrar]) {
+    throw new Error(
+      `${host} is a zone apex and ${knownRegistrar} can't point an apex at a CNAME (D22). ` +
+        `Provision www.${host} instead; the client then forwards ${host} → https://www.${host} (permanent/301, HTTPS destination).`
+    );
+  }
+
+  const ch = await provider.create(host);
+  await controlTx(async (db) => {
+    // The newest provisioned domain becomes primary; a tenant can never hold
+    // two (partial unique index, migration 006) — demote first, atomically.
+    await db.query("UPDATE domains SET is_primary = false WHERE tenant_id = $1 AND is_primary", [tenantId]);
+    await db.query(
+      `INSERT INTO domains (tenant_id, hostname, is_primary, registrar, verification_status, cf_hostname_id, instructions_sent_at)
+       VALUES ($1, $2, true, $4, 'pending', $3, now())
+       ON CONFLICT (hostname) DO UPDATE
+         SET is_primary = true, cf_hostname_id = $3, verification_status = 'pending',
+             instructions_sent_at = now(), released_at = NULL, verified_at = NULL,
+             registrar = COALESCE(domains.registrar, $4)`,
+      [tenantId, host, ch.id, knownRegistrar]
+    );
+  });
 
   if (tenant.owner_email) {
     await sendPlatformEmail({
       to: tenant.owner_email,
-      subject: `Connect ${hostname} to your new site (5 minutes)`,
-      text: registrarInstructions(row?.registrar ?? null, hostname, ch.dns_targets),
+      subject: `Connect ${host} to your new site (5 minutes)`,
+      text: registrarInstructions(knownRegistrar, host, ch.dns_targets),
     });
   }
-  await audit(actor, tenantId, "domain.provisioned", { hostname, cf_id: ch.id, mode: provider.mode });
+  await audit(actor, tenantId, "domain.provisioned", { hostname: host, cf_id: ch.id, mode: provider.mode });
 }
 
 /** 2.5: flip draft → live only when the brand gate has passed AND a domain verified (or staff forces). */
@@ -253,8 +356,12 @@ export async function releaseDomains(tenantId: string, actor: string): Promise<s
         console.error(`[domains] CF removal failed for ${d.hostname} (continuing):`, e);
       }
     }
+    // A released domain is never primary — leaving is_primary set is what
+    // pointed the nightly export at the dead apex for a week (Session 1 fix;
+    // migration 006 makes the two-primaries state unrepresentable).
     await controlQuery(
-      `UPDATE domains SET verification_status = 'released', released_at = now(), cf_hostname_id = NULL WHERE id = $1`,
+      `UPDATE domains SET verification_status = 'released', released_at = now(),
+              cf_hostname_id = NULL, is_primary = false WHERE id = $1`,
       [d.id]
     );
     released.push(d.hostname);

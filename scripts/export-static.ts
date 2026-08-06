@@ -88,7 +88,14 @@ async function liveTenants(): Promise<TenantRow[]> {
     const { rows } = await db.query(
       `
       SELECT t.id, t.slug,
-             COALESCE((SELECT hostname FROM domains d WHERE d.tenant_id = t.id AND d.is_primary LIMIT 1),
+             -- The primary among VERIFIED, NON-RELEASED domains, deterministically.
+             -- The old unordered "WHERE is_primary LIMIT 1" grabbed a released
+             -- apex (403 on every page) and silently staled the failover
+             -- snapshots for a week (Session 1 fix; see migration 006).
+             COALESCE((SELECT hostname FROM domains d
+                        WHERE d.tenant_id = t.id AND d.is_primary
+                          AND d.verification_status = 'verified'
+                        ORDER BY d.verified_at DESC LIMIT 1),
                       t.slug || '.' || $1) AS hostname,
              bp.nap->>'phone_display' AS phone_display,
              bp.nap->>'phone_tel' AS phone_tel

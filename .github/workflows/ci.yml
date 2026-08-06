@@ -68,6 +68,9 @@ jobs:
       - name: Origin/edge trust boundary (D23)
         run: npm run test:boundary
 
+      - name: Domain instructions + primary-domain invariants (D22)
+        run: npm run test:domains
+
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
 
