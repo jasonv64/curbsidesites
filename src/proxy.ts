@@ -15,10 +15,18 @@
  * notFound() leaves draft content in the 404 body (found 2026-07-18 on the
  * dub-dates fixture, fixed in Session 1).
  */
+import { timingSafeEqual, createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { hostBlocked } from "@/lib/tenant-gate";
 
 const PREVIEW_COOKIE = "cs_preview";
+
+/** Constant-time string compare (hash first so lengths always match). */
+function secretMatches(candidate: string | null, secret: string): boolean {
+  const a = createHash("sha256").update(candidate ?? "").digest();
+  const b = createHash("sha256").update(secret).digest();
+  return timingSafeEqual(a, b);
+}
 
 export default async function proxy(request: NextRequest) {
   const url = request.nextUrl;
@@ -26,17 +34,18 @@ export default async function proxy(request: NextRequest) {
   // FQDN (that's how ACA ingress routes) and the visitor's real hostname rides
   // in X-Forwarded-Host. Only trusted when TRUST_PROXY_HOST=1 — locally an
   // attacker-supplied X-Forwarded-Host must stay meaningless.
-  const forwardedHost =
-    process.env.TRUST_PROXY_HOST === "1"
-      ? request.headers.get("x-forwarded-host")?.split(",")[0]?.trim() || null
-      : null;
+  const trustProxy = process.env.TRUST_PROXY_HOST === "1";
+  const forwardedHost = trustProxy
+    ? request.headers.get("x-forwarded-host")?.split(",")[0]?.trim() || null
+    : null;
   const host = forwardedHost ?? request.headers.get("host");
 
   // The image optimizer fetches /uploads/<slug>/<file> through an internal
-  // mock request that carries NO Host header (Next 16, fetchInternalImage).
-  // The path already names the tenant, so route it to that tenant's platform
-  // host instead of failing tenant resolution. Local-dev path only — real
-  // uploads move to Azure Blob remotePatterns in Session 4.
+  // mock request that carries NO Host header (Next 16, fetchInternalImage) —
+  // and no edge secret either, so it is exempt from the D23 gate below. Safe:
+  // the path names the tenant (no header decides tenancy) and everything
+  // under it is public site imagery (ASSUMPTIONS #75). Local-dev path only —
+  // real uploads move to Azure Blob remotePatterns in Session 4.
   if (url.pathname.startsWith("/uploads/")) {
     const slug = url.pathname.split("/")[2];
     if (slug) {
@@ -44,6 +53,28 @@ export default async function proxy(request: NextRequest) {
       const rewritten = url.clone();
       rewritten.pathname = `/s/${encodeURIComponent(`${slug.toLowerCase()}.${apex}`)}${url.pathname}`;
       return NextResponse.rewrite(rewritten);
+    }
+  }
+
+  // The trust boundary (D23): the origin FQDN is public and X-Forwarded-Host
+  // decides tenancy, so proxied mode only serves requests that PROVE they
+  // came through our edge Worker — the shared secret it sets in
+  // X-Curbside-Edge. Without this, every edge control (WAF, redirects,
+  // failover, the draft gate's noindex surface) is optional to anyone who
+  // curls the Container App directly with a forged X-Forwarded-Host.
+  if (trustProxy) {
+    const edgeSecret = process.env.EDGE_SHARED_SECRET;
+    if (!edgeSecret) {
+      // D23's invariant, structurally: TRUST_PROXY_HOST=1 must never run
+      // behind an ingress that doesn't authenticate the edge. Loud per D11 —
+      // fix by setting EDGE_SHARED_SECRET on the Container App and the
+      // matching `wrangler secret put EDGE_SHARED_SECRET` on the Worker.
+      throw new Error(
+        "TRUST_PROXY_HOST=1 requires EDGE_SHARED_SECRET (D23). Set it on the app and the edge Worker — src/proxy.ts."
+      );
+    }
+    if (!secretMatches(request.headers.get("x-curbside-edge"), edgeSecret)) {
+      return new NextResponse("Forbidden: origin only serves edge traffic", { status: 403 });
     }
   }
 

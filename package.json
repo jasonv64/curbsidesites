@@ -22,8 +22,9 @@
     "fetch:instagram": "tsx scripts/fetch-instagram.ts",
     "test:rls": "vitest run tests/rls-isolation.test.ts",
     "test:growth": "vitest run tests/growth-scheduler.test.ts tests/nap-invariant.test.ts tests/growth-quota.test.ts",
+    "test:boundary": "vitest run tests/trust-boundary.test.ts",
     "test:e2e": "playwright test",
-    "verify": "npm run build && npm run test:rls && npm run test:growth && npm run test:e2e"
+    "verify": "npm run build && npm run test:rls && npm run test:growth && npm run test:boundary && npm run test:e2e"
   },
   "dependencies": {
     "@azure/identity": "^4.13.0",

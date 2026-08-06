@@ -29,7 +29,14 @@
  *   ALERT_EMAIL   — where failover alerts go (optional; skipped if unset)
  *   ALERT_FROM    — verified Resend sender, e.g. alerts@curbsidesites.com
  * Secrets (wrangler secret put):
- *   RESEND_API_KEY — for failover alert email (optional)
+ *   RESEND_API_KEY     — for failover alert email (optional)
+ *   EDGE_SHARED_SECRET — proves to the origin that a request came through
+ *                        this Worker (D23). The app (src/proxy.ts) rejects
+ *                        proxied traffic without it once TRUST_PROXY_HOST=1,
+ *                        so set the same value on the Container App
+ *                        (RUNBOOK Phase 5) BEFORE deploying an app image
+ *                        that validates it. Deploy order: Worker first
+ *                        (origin ignores the extra header), then the app.
  */
 
 const ORIGIN_TIMEOUT_MS = 20_000;
@@ -71,6 +78,11 @@ export default {
     const headers = new Headers(request.headers);
     headers.set("X-Forwarded-Host", visitorHost);
     headers.set("X-Forwarded-Proto", "https");
+    // D23: authenticate this hop. The origin FQDN is public knowledge and
+    // X-Forwarded-Host decides tenancy — without this header the origin
+    // refuses proxied traffic, so edge controls can't be bypassed by
+    // addressing the Container App directly.
+    if (env.EDGE_SHARED_SECRET) headers.set("X-Curbside-Edge", env.EDGE_SHARED_SECRET);
 
     let originResponse = null;
     try {

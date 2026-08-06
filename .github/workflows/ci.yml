@@ -62,6 +62,9 @@ jobs:
       - name: Growth plane — scheduler/quota/NAP-invariant gates (Session 3)
         run: npm run test:growth
 
+      - name: Origin/edge trust boundary (D23)
+        run: npm run test:boundary
+
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
 
