@@ -27,6 +27,16 @@ export async function generateMetadata({
   const { host } = await params;
   const bundle = await getTenantBundle(decodeURIComponent(host));
   if (!bundle) return { title: "Not found" };
+
+  // Draft content is preview-cookie-only. Gate before including any tenant
+  // metadata in the response, preventing content disclosure via metadata tags.
+  if (bundle.tenant.status === "draft") {
+    const jar = await cookies();
+    if (jar.get("cs_preview")?.value !== bundle.tenant.preview_token) {
+      return { title: "Not found" };
+    }
+  }
+
   const origin = canonicalOrigin(bundle, bundle.hostKind, decodeURIComponent(host));
   // Platform subdomains are a sales/preview surface — never indexed, so the
   // custom domain is the only canonical copy in search.
