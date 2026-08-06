@@ -13,7 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16-alpine
+        # postgres 18 to match local + production (ASSUMPTIONS #83)
+        image: postgres:18-alpine
         env:
           POSTGRES_DB: curbside
           POSTGRES_USER: curbside_owner
@@ -42,6 +43,13 @@ jobs:
       - run: npm ci
       - run: npm run db:migrate
       - run: npm run db:seed
+
+      # The control-plane e2e suite (12.4 / 12.5) asserts against the fleet
+      # fixtures (bayside-detailing, sunrise-pool-care) — this seed was never
+      # run in CI, which is why every run in repo history failed (D24).
+      # DB-only, idempotent, no network or secrets. Banned from PRODUCTION
+      # (ASSUMPTIONS #80), not from CI.
+      - run: npm run db:seed:fleet
 
       - name: Guard — the RLS isolation test must exist (Invariant 2)
         run: test -f tests/rls-isolation.test.ts
