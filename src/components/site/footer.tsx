@@ -8,11 +8,19 @@ import { CallLink, MapLink } from "@/components/track";
  * tenant — 200 identical footer links is a link-scheme footprint that would
  * penalize every client at once. Deterministic per slug.
  */
-const CREDITS: { text: string; href: string }[] = [
+// INTERIM targets (Session 1): /how-it-works, /care-plans, and /work 404'd
+// because the marketing site (Session 2) doesn't exist yet — mass links to
+// dead pages are the exact footprint this invariant exists to avoid. Until
+// Session 2 builds the real pages, every variant resolves to the marketing
+// root (fragment variety keeps the hrefs distinct); the anchor-text variety
+// is the load-bearing part and is unchanged. tests/footer-credits.test.ts
+// fails loudly if any target stops returning 200 — swap these back to real
+// paths in Session 2 and the test keeps holding.
+export const CREDITS: { text: string; href: string }[] = [
   { text: "Website by Curbside Sites", href: "https://curbsidesites.com" },
-  { text: "Built and managed by Curbside Sites", href: "https://curbsidesites.com/how-it-works" },
-  { text: "Site care by Curbside Sites", href: "https://curbsidesites.com/care-plans" },
-  { text: "Web design for local shops — Curbside Sites", href: "https://curbsidesites.com/work" },
+  { text: "Built and managed by Curbside Sites", href: "https://curbsidesites.com/#how-it-works" },
+  { text: "Site care by Curbside Sites", href: "https://curbsidesites.com/#care-plans" },
+  { text: "Web design for local shops — Curbside Sites", href: "https://curbsidesites.com/#work" },
   { text: "Powered by Curbside Sites", href: "https://curbsidesites.com/#platform" },
 ];
 

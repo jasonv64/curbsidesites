@@ -71,6 +71,9 @@ jobs:
       - name: Domain instructions + primary-domain invariants (D22)
         run: npm run test:domains
 
+      - name: Footer credit targets return 200 in production (Invariant 11)
+        run: npm run test:credits
+
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
 
