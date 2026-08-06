@@ -1,20 +1,20 @@
 /**
  * Host → tenant resolution and the per-tenant render bundle.
  *
- * Three hostname states (TENANT-APP Part 2):
- *   1. custom domain        — exact match in the domains table
- *   2. platform subdomain   — <slug>.$PLATFORM_APEX, works the moment the
- *                             tenant row exists (no domains row needed)
- *   3. unknown host         — null → clean 404
+ * Host resolution itself lives in src/lib/tenant-gate.ts (re-exported here)
+ * so the proxy can run the draft-visibility gate without importing
+ * react/next-cache. This file owns the cached render bundle.
  *
  * Status gates:
- *   draft     → platform subdomain only (custom domain resolves to null)
+ *   draft     → platform subdomain only (resolver), preview cookie enforced
+ *               in src/proxy.ts BEFORE render (and again in the layout)
  *   live      → everything on
  *   suspended → the dignified under-construction page (rendered by layout)
  */
 import { cache } from "react";
 import { unstable_cache } from "next/cache";
-import { platformQuery, withTenant } from "@/lib/db";
+import { withTenant } from "@/lib/db";
+import { normalizeHost, resolveHostUncached } from "@/lib/tenant-gate";
 import type {
   BrandTokens,
   BusinessProfile,
@@ -24,52 +24,14 @@ import type {
   TenantRow,
 } from "@/lib/schemas";
 
-export type HostKind = "platform" | "custom";
-
-export interface ResolvedTenant {
-  tenant: TenantRow;
-  hostKind: HostKind;
-}
-
-export function platformApex(): string {
-  return (process.env.PLATFORM_APEX ?? "localhost").toLowerCase();
-}
-
-/** Lowercase, strip port. Host headers arrive as "foo.localhost:3000". */
-export function normalizeHost(raw: string): string {
-  return raw.toLowerCase().replace(/:\d+$/, "").replace(/\.$/, "");
-}
-
-const TENANT_COLS =
-  "id, slug, business_name, status, plan_tier, features, owner_email, preview_token";
-
-/** Uncached resolution — one indexed query either way. */
-export async function resolveHostUncached(rawHost: string): Promise<ResolvedTenant | null> {
-  const host = normalizeHost(rawHost);
-  const apex = platformApex();
-
-  if (host.endsWith(`.${apex}`)) {
-    const slug = host.slice(0, -(apex.length + 1));
-    if (!/^[a-z0-9-]+$/.test(slug)) return null;
-    const rows = await platformQuery<TenantRow>(
-      `SELECT ${TENANT_COLS} FROM tenants WHERE slug = $1`,
-      [slug]
-    );
-    if (!rows[0]) return null;
-    return { tenant: rows[0], hostKind: "platform" };
-  }
-
-  const rows = await platformQuery<TenantRow>(
-    `SELECT ${TENANT_COLS.split(", ").map((c) => "t." + c).join(", ")}
-       FROM domains d JOIN tenants t ON t.id = d.tenant_id
-      WHERE d.hostname = $1`,
-    [host]
-  );
-  if (!rows[0]) return null;
-  // Draft tenants exist only on their platform subdomain.
-  if (rows[0].status === "draft") return null;
-  return { tenant: rows[0], hostKind: "custom" };
-}
+export {
+  platformApex,
+  normalizeHost,
+  resolveHostUncached,
+  type HostKind,
+  type ResolvedTenant,
+} from "@/lib/tenant-gate";
+import type { HostKind } from "@/lib/tenant-gate";
 
 /** Per-request memo for pages/layouts sharing one resolution. */
 export const resolveHost = cache(resolveHostUncached);

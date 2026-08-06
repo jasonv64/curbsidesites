@@ -113,7 +113,22 @@ test("draft tenant: 404 without preview, browsable with preview token, custom do
     (await db.query("SELECT preview_token FROM tenants WHERE slug = $1", [SLUG])).rows[0].preview_token
   );
 
-  // No preview → clean 404
+  // No preview → clean 404, and CLEAN means the body too. The status was
+  // always right; the leak was the RSC flight payload streaming the page
+  // before the layout's gate resolved (Session 1 tripwire — the fix lives in
+  // src/proxy.ts, before render). Raw request: no JS, the bytes themselves.
+  for (const path of ["/", "/services", "/contact"]) {
+    const raw = await request.get(`http://127.0.0.1:3000${path}`, {
+      headers: { Host: `${SLUG}.localhost` },
+    });
+    expect(raw.status(), path).toBe(404);
+    const body = await raw.text();
+    // (The slug itself is in the attacker's own request — not a disclosure.)
+    for (const leaked of ["Bare Demo Diesel", "555-0100", "Diesel done right"]) {
+      expect(body, `${path} must not disclose ${JSON.stringify(leaked)}`).not.toContain(leaked);
+    }
+  }
+
   const blocked = await page.goto(url(SLUG, "/"));
   expect(blocked?.status()).toBe(404);
 

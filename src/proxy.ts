@@ -8,14 +8,19 @@
  *     → rewrite → /s/ironridgeoffroad.com/services
  *
  * Also handles the draft-preview handshake: ?preview=<token> becomes a
- * host-scoped cookie and redirects to the clean URL. The tenant layout
- * compares the cookie to tenants.preview_token.
+ * host-scoped cookie and redirects to the clean URL — and enforces it:
+ * a draft tenant without the right cookie is 404'd HERE, before any
+ * rendering starts. The layout's own gate is defense-in-depth only; Next
+ * streams the page concurrently with the layout, so a layout-level
+ * notFound() leaves draft content in the 404 body (found 2026-07-18 on the
+ * dub-dates fixture, fixed in Session 1).
  */
 import { NextRequest, NextResponse } from "next/server";
+import { hostBlocked } from "@/lib/tenant-gate";
 
 const PREVIEW_COOKIE = "cs_preview";
 
-export default function proxy(request: NextRequest) {
+export default async function proxy(request: NextRequest) {
   const url = request.nextUrl;
   // Behind the Cloudflare edge Worker (Session 4), Host is the Container Apps
   // FQDN (that's how ACA ingress routes) and the visitor's real hostname rides
@@ -81,6 +86,17 @@ export default function proxy(request: NextRequest) {
       path: "/",
     });
     return res;
+  }
+
+  // Visibility gate (SPECS.md §I Part 2: draft content is preview-cookie-
+  // only). Must run before the rewrite so no draft markup ever streams.
+  // Unknown hosts take the same branch, so a gated draft is byte-identical
+  // to a host that doesn't exist (drafts must not be enumerable).
+  if (await hostBlocked(host, request.cookies.get(PREVIEW_COOKIE)?.value)) {
+    // No route matches this path → the root not-found page, status 404.
+    const blocked = url.clone();
+    blocked.pathname = "/host-gate-404";
+    return NextResponse.rewrite(blocked);
   }
 
   const rewritten = url.clone();
